@@ -1,5 +1,5 @@
 {
-    "name": "opencode-antigravity-auth",
+    "name": "@pieliesdie/opencode-antigravity-auth",
     "version": "1.6.0",
     "description": "Google Antigravity IDE OAuth auth plugin for Opencode - access Gemini 3 Pro and Claude 4.6 using Google credentials",
     "main": "./dist/index.js",
