@@ -579,7 +579,7 @@ describe("request.ts", () => {
       );
 
       const headers = result.init.headers as Headers;
-      expect(result.request).toBe("https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent");
+      expect(result.request).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
       expect(headers.get("Authorization")).toBe("Bearer test-token");
       expect(headers.get("x-goog-api-key")).toBeNull();
       expect(result.init.method).toBe("POST");
@@ -1396,6 +1396,30 @@ it("removes API key headers", () => {
         });
       });
 
+      it("maps the gemini-3.7-flash high variant to the AGY high backend", () => {
+        const result = prepareAntigravityRequest(
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              contents: [],
+              providerOptions: { google: { thinkingLevel: "high" } },
+            }),
+          },
+          mockAccessToken,
+          mockProjectId,
+          undefined,
+          "antigravity"
+        );
+        expect(result.effectiveModel).toBe("gemini-3.7-flash-high");
+        const wrapped = JSON.parse(result.init.body as string);
+        expect(wrapped.model).toBe("gemini-3.7-flash-high");
+        expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
+          thinkingLevel: "high",
+          includeThoughts: true,
+        });
+      });
+
       it("transforms gemini-3-flash to gemini-3-flash-preview for gemini-cli headerStyle", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent",
@@ -1546,7 +1570,7 @@ it("removes API key headers", () => {
         undefined,
         "gemini-2.5-pro",
         "test-project",
-        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
         "gemini-2.5-pro",
         "session-1",
         0,
@@ -1554,7 +1578,7 @@ it("removes API key headers", () => {
         undefined,
         [
           "status=500 INTERNAL",
-          "endpoint=https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent",
+          "endpoint=https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
           "account=test@example.com",
         ],
       );
@@ -1562,7 +1586,7 @@ it("removes API key headers", () => {
       const bodyText = await transformed.text();
       expect(bodyText).toContain("[ThinkingResolution]");
       expect(bodyText).toContain("status=500 INTERNAL");
-      expect(bodyText).toContain("endpoint=https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent");
+      expect(bodyText).toContain("endpoint=https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
       expect(bodyText).toContain("account=test@example.com");
 
       initializeDebug(DEFAULT_CONFIG);
@@ -1589,7 +1613,7 @@ it("removes API key headers", () => {
         undefined,
         "antigravity-claude-opus-4-6-thinking",
         "test-project",
-        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
         "claude-opus-4-6-thinking",
         "session-1",
         0,
@@ -1621,7 +1645,7 @@ it("removes API key headers", () => {
           undefined,
           "antigravity-claude-opus-4-6-thinking",
           "test-project",
-          "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+          "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
           "claude-opus-4-6-thinking",
           "session-1",
         ),

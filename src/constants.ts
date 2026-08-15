@@ -26,16 +26,16 @@ export const ANTIGRAVITY_REDIRECT_URI = "http://localhost:51121/oauth-callback";
 
 /**
  * Root endpoints for the Antigravity API (in fallback order).
- * CLIProxy and Vibeproxy use the daily sandbox endpoint first,
- * then fallback to autopush and prod if needed.
+ * AGY uses the daily production endpoint first, then falls back to autopush
+ * and Cloud Code production if needed.
  */
-export const ANTIGRAVITY_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+export const ANTIGRAVITY_ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com";
 export const ANTIGRAVITY_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
 export const ANTIGRAVITY_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com";
 
 /**
  * Endpoint fallback order (daily → autopush → prod).
- * Shared across request handling and project discovery to mirror CLIProxy behavior.
+ * Shared across request handling and project discovery to mirror AGY behavior.
  */
 export const ANTIGRAVITY_ENDPOINT_FALLBACKS = [
   ANTIGRAVITY_ENDPOINT_DAILY,
@@ -54,7 +54,7 @@ export const ANTIGRAVITY_LOAD_ENDPOINTS = [
 ] as const;
 
 /**
- * Primary endpoint to use (daily sandbox - same as CLIProxy/Vibeproxy).
+ * Primary endpoint to use (AGY's daily production endpoint).
  */
 export const ANTIGRAVITY_ENDPOINT = ANTIGRAVITY_ENDPOINT_DAILY;
 
@@ -66,9 +66,17 @@ export const ANTIGRAVITY_ENDPOINT = ANTIGRAVITY_ENDPOINT_DAILY;
 export const GEMINI_CLI_ENDPOINT = ANTIGRAVITY_ENDPOINT_PROD;
 
 /**
- * Hardcoded project id used when Antigravity does not return one (e.g., business/workspace accounts).
+ * AGY's consumer OAuth flow uses this backend project when no managed project is returned.
  */
-export const ANTIGRAVITY_DEFAULT_PROJECT_ID = "rising-fact-p41fc";
+export const ANTIGRAVITY_DEFAULT_PROJECT_ID = "default-cli-project";
+
+/**
+ * User-Agent mirroring the official Antigravity CLI (agy).
+ * Accepted by v1internal:loadCodeAssist and friends; IDE-style UAs can be
+ * rejected or gated by the backend (cf. upstream issue #592).
+ */
+export const ANTIGRAVITY_CLI_USER_AGENT =
+  "antigravity/cli/1.1.13 (aidev_client; os_type=linux; arch=amd64; cl=964361259; auth_method=consumer)";
 
 export const ANTIGRAVITY_VERSION_FALLBACK = "1.18.3";
 let antigravityVersion = ANTIGRAVITY_VERSION_FALLBACK;

@@ -7,6 +7,7 @@ import {
   EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
   SKIP_THOUGHT_SIGNATURE,
   MIN_SIGNATURE_LENGTH,
+  ANTIGRAVITY_CLI_USER_AGENT,
   getRandomizedHeaders,
   type HeaderStyle,
 } from "../constants";
@@ -70,6 +71,7 @@ import {
   resolveModelForHeaderStyle,
   resolveAntigravityGemini35FlashBackendModel,
   resolveAntigravityGemini36FlashBackendModel,
+  resolveAntigravityGemini37FlashBackendModel,
   getDefaultGemini3ThinkingLevel,
   isClaudeModel,
   isClaudeThinkingModel,
@@ -1344,6 +1346,11 @@ export function prepareAntigravityRequest(
         }
 
         if (headerStyle === "antigravity") {
+          const gemini37FlashBackendModel =
+            resolveAntigravityGemini37FlashBackendModel(
+              effectiveModel,
+              tierThinkingLevel,
+            );
           const gemini36FlashBackendModel =
             resolveAntigravityGemini36FlashBackendModel(
               effectiveModel,
@@ -1354,7 +1361,10 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
-          if (gemini36FlashBackendModel) {
+          if (gemini37FlashBackendModel) {
+            effectiveModel = gemini37FlashBackendModel;
+            wrappedBody.model = gemini37FlashBackendModel;
+          } else if (gemini36FlashBackendModel) {
             effectiveModel = gemini36FlashBackendModel;
             wrappedBody.model = gemini36FlashBackendModel;
           } else if (gemini35FlashBackendModel) {
@@ -1488,6 +1498,11 @@ export function prepareAntigravityRequest(
         }
 
         if (headerStyle === "antigravity") {
+          const gemini37FlashBackendModel =
+            resolveAntigravityGemini37FlashBackendModel(
+              effectiveModel,
+              tierThinkingLevel,
+            );
           const gemini36FlashBackendModel =
             resolveAntigravityGemini36FlashBackendModel(
               effectiveModel,
@@ -1498,7 +1513,9 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
-          if (gemini36FlashBackendModel) {
+          if (gemini37FlashBackendModel) {
+            effectiveModel = gemini37FlashBackendModel;
+          } else if (gemini36FlashBackendModel) {
             effectiveModel = gemini36FlashBackendModel;
           } else if (gemini35FlashBackendModel) {
             effectiveModel = gemini35FlashBackendModel;
@@ -2272,19 +2289,13 @@ export function prepareAntigravityRequest(
   }
 
   if (headerStyle === "antigravity") {
-    // Use randomized headers as the fallback pool for Antigravity mode
-    const selectedHeaders = getRandomizedHeaders("antigravity", requestedModel);
-
-    // Antigravity mode: Match Antigravity Manager behavior
-    // AM only sends User-Agent on content requests — no X-Goog-Api-Client, no Client-Metadata header
-    // (ideType=ANTIGRAVITY goes in request body metadata via project.ts, not as a header)
-    const fingerprint = options?.fingerprint ?? getSessionFingerprint();
-    const fingerprintHeaders = buildFingerprintHeaders(fingerprint);
-
-    headers.set(
-      "User-Agent",
-      fingerprintHeaders["User-Agent"] || selectedHeaders["User-Agent"],
-    );
+    // Use the official Antigravity CLI User-Agent. The backend gates newer
+    // models (e.g. gemini-3.7-flash) on the CLI UA; IDE-style fingerprint
+    // UAs like "antigravity/2.0.6 win32/x64" are rejected with 404
+    // "Requested entity was not found" on those models.
+    headers.set("User-Agent", ANTIGRAVITY_CLI_USER_AGENT);
+    headers.delete("X-Goog-Api-Client");
+    headers.delete("Client-Metadata");
   } else {
     // Gemini CLI mode: match opencode-gemini-auth Code Assist header set exactly
     headers.set("User-Agent", GEMINI_CLI_HEADERS["User-Agent"]);

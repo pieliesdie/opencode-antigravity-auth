@@ -1,8 +1,8 @@
 import {
-  getAntigravityHeaders,
   ANTIGRAVITY_ENDPOINT_FALLBACKS,
   ANTIGRAVITY_LOAD_ENDPOINTS,
   ANTIGRAVITY_DEFAULT_PROJECT_ID,
+  ANTIGRAVITY_CLI_USER_AGENT,
 } from "../constants";
 import { formatRefreshParts, parseRefreshParts } from "./auth";
 import { createLogger } from "./logger";
@@ -42,16 +42,17 @@ interface OnboardUserPayload {
   };
 }
 
-function buildMetadata(projectId?: string): Record<string, string> {
-  const metadata: Record<string, string> = {
+/**
+ * Builds the metadata payload for v1internal loadCodeAssist/onboardUser calls.
+ * Mirrors the official Antigravity CLI exactly: ideType only. Extra fields
+ * such as platform ("MACOS"/"WINDOWS") are rejected by the backend proto
+ * (Invalid value at 'metadata.platform' -> HTTP 400), which silently breaks
+ * managed-project discovery.
+ */
+function buildMetadata(_projectId?: string): Record<string, string> {
+  return {
     ideType: CODE_ASSIST_METADATA.ideType,
-    platform: CODE_ASSIST_METADATA.platform,
-    pluginType: CODE_ASSIST_METADATA.pluginType,
   };
-  if (projectId) {
-    metadata.duetProject = projectId;
-  }
-  return metadata;
 }
 
 /**
@@ -128,9 +129,7 @@ export async function loadManagedProject(
   const loadHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${accessToken}`,
-    "User-Agent": "google-api-nodejs-client/9.15.1",
-    "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-    "Client-Metadata": getAntigravityHeaders()["Client-Metadata"],
+    "User-Agent": ANTIGRAVITY_CLI_USER_AGENT,
   };
 
   const loadEndpoints = Array.from(
@@ -189,7 +188,7 @@ export async function onboardManagedProject(
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${accessToken}`,
-              ...getAntigravityHeaders(),
+              "User-Agent": ANTIGRAVITY_CLI_USER_AGENT,
             },
             body: JSON.stringify(requestBody),
           },

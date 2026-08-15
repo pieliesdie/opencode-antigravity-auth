@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest"
 import {
+  ANTIGRAVITY_DEFAULT_PROJECT_ID,
   GEMINI_CLI_HEADERS,
   getRandomizedHeaders,
   type HeaderSet,
 } from "./constants.ts"
+
+it("uses AGY's consumer fallback project", () => {
+  expect(ANTIGRAVITY_DEFAULT_PROJECT_ID).toBe("default-cli-project")
+})
 
 describe("GEMINI_CLI_HEADERS", () => {
   it("matches Code Assist headers from opencode-gemini-auth", () => {

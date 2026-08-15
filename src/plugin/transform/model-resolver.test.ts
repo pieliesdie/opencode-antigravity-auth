@@ -83,7 +83,7 @@ describe("resolveModelWithTier", () => {
 
     it("antigravity-gemini-3.7-flash defaults to low thinking with explicit quota", () => {
       const result = resolveModelWithTier("antigravity-gemini-3.7-flash");
-      expect(result.actualModel).toBe("gemini-3.7-flash");
+      expect(result.actualModel).toBe("gemini-3.7-flash-low");
       expect(result.thinkingLevel).toBe("low");
       expect(result.quotaPreference).toBe("antigravity");
       expect(result.explicitQuota).toBe(true);
@@ -283,12 +283,12 @@ describe("resolveModelWithTier", () => {
     });
 
     it.each([
-      ["antigravity-gemini-3.7-flash", "gemini-3.7-flash", "low"],
-      ["antigravity-gemini-3.7-flash-minimal", "gemini-3.7-flash", "minimal"],
-      ["antigravity-gemini-3.7-flash-low", "gemini-3.7-flash", "low"],
-      ["antigravity-gemini-3.7-flash-medium", "gemini-3.7-flash", "medium"],
-      ["antigravity-gemini-3.7-flash-high", "gemini-3.7-flash", "high"],
-    ])("resolves %s with %s thinkingLevel", (requested, actual, thinkingLevel) => {
+      ["antigravity-gemini-3.7-flash", "gemini-3.7-flash-low", "low"],
+      ["antigravity-gemini-3.7-flash-minimal", "gemini-3.7-flash-low", "low"],
+      ["antigravity-gemini-3.7-flash-low", "gemini-3.7-flash-low", "low"],
+      ["antigravity-gemini-3.7-flash-medium", "gemini-3.7-flash-medium", "medium"],
+      ["antigravity-gemini-3.7-flash-high", "gemini-3.7-flash-high", "high"],
+    ])("maps %s to the Antigravity backend id %s", (requested, actual, thinkingLevel) => {
       const result = resolveModelWithTier(requested);
       expect(result.actualModel).toBe(actual);
       expect(result.thinkingLevel).toBe(thinkingLevel);

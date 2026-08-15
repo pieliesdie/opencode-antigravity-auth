@@ -86,6 +86,13 @@ const GEMINI_36_FLASH_MODELS = {
   medium: "gemini-3.6-flash-medium",
   high: "gemini-3.6-flash-high",
 } as const;
+const GEMINI_37_FLASH_REGEX =
+  /^gemini-3\.7-flash(?:-(minimal|low|medium|high))?$/i;
+const GEMINI_37_FLASH_MODELS = {
+  low: "gemini-3.7-flash-low",
+  medium: "gemini-3.7-flash-medium",
+  high: "gemini-3.7-flash-high",
+} as const;
 const GEMINI_PUBLIC_ONLY_REGEX =
   /^(?:gemini-3\.5-flash-lite(?:-(?:minimal|low|medium|high))?|gemini-flash-lite-latest)$/i;
 /**
@@ -210,6 +217,28 @@ export function resolveAntigravityGemini36FlashBackendModel(
   return GEMINI_36_FLASH_MODELS[level];
 }
 
+/**
+ * AGY exposes Gemini 3.7 Flash only through tier-specific backend ids.
+ * Minimal is retained as a compatibility alias for low, but is not advertised.
+ */
+export function resolveAntigravityGemini37FlashBackendModel(
+  model: string,
+  thinkingLevel?: string,
+): string | undefined {
+  const modelWithoutQuota = model.replace(QUOTA_PREFIX_REGEX, "");
+  const match = modelWithoutQuota.match(GEMINI_37_FLASH_REGEX);
+  if (!match) {
+    return undefined;
+  }
+
+  const requestedLevel = (thinkingLevel ?? match[1] ?? "low").toLowerCase();
+  const level = requestedLevel === "minimal" ? "low" : requestedLevel;
+  if (level !== "low" && level !== "medium" && level !== "high") {
+    return undefined;
+  }
+  return GEMINI_37_FLASH_MODELS[level];
+}
+
 export function getDefaultGemini3ThinkingLevel(model: string): string {
   const normalized = model.toLowerCase().replace(QUOTA_PREFIX_REGEX, "");
   if (/^gemini-3\.6-flash(?:-|$)/.test(normalized)) {
@@ -283,19 +312,27 @@ export function resolveModelWithTier(
   const isGemini3Pro = isGemini3ProModel(modelWithoutQuota);
   const isGemini3Flash = isGemini3FlashModel(modelWithoutQuota);
 
+  let effectiveTier = tier;
   let antigravityModel = modelWithoutQuota;
   if (skipAlias) {
+    const gemini37FlashBackendModel =
+      resolveAntigravityGemini37FlashBackendModel(modelWithoutQuota, effectiveTier);
     const gemini36FlashBackendModel =
-      resolveAntigravityGemini36FlashBackendModel(modelWithoutQuota, tier);
+      resolveAntigravityGemini36FlashBackendModel(modelWithoutQuota, effectiveTier);
     const gemini35FlashBackendModel =
-      resolveAntigravityGemini35FlashBackendModel(modelWithoutQuota, tier);
-    if (gemini36FlashBackendModel) {
+      resolveAntigravityGemini35FlashBackendModel(modelWithoutQuota, effectiveTier);
+    if (gemini37FlashBackendModel) {
+      antigravityModel = gemini37FlashBackendModel;
+      if (String(effectiveTier) === "minimal") {
+        effectiveTier = "low";
+      }
+    } else if (gemini36FlashBackendModel) {
       antigravityModel = gemini36FlashBackendModel;
     } else if (gemini35FlashBackendModel) {
       antigravityModel = gemini35FlashBackendModel;
-    } else if (isGemini3Pro && !tier && !isImageModel) {
+    } else if (isGemini3Pro && !effectiveTier && !isImageModel) {
       antigravityModel = `${modelWithoutQuota}-low`;
-    } else if (isGemini3Flash && tier) {
+    } else if (isGemini3Flash && effectiveTier) {
       antigravityModel = baseName;
     }
   }
@@ -325,7 +362,7 @@ export function resolveModelWithTier(
     resolvedModel.toLowerCase().includes("claude") &&
     resolvedModel.toLowerCase().includes("thinking");
 
-  if (!tier) {
+  if (!effectiveTier) {
     // Gemini 3 models without explicit tier get a default thinkingLevel
     if (isEffectiveGemini3) {
       return {
@@ -359,8 +396,8 @@ export function resolveModelWithTier(
   if (isEffectiveGemini3) {
     return {
       actualModel: resolvedModel,
-      thinkingLevel: tier,
-      tier,
+      thinkingLevel: effectiveTier,
+      tier: effectiveTier,
       isThinkingModel: true,
       quotaPreference,
       explicitQuota,
@@ -369,12 +406,12 @@ export function resolveModelWithTier(
 
   const budgetFamily = getBudgetFamily(resolvedModel);
   const budgets = THINKING_TIER_BUDGETS[budgetFamily];
-  const thinkingBudget = budgets[tier];
+  const thinkingBudget = budgets[effectiveTier];
 
   return {
     actualModel: resolvedModel,
     thinkingBudget,
-    tier,
+    tier: effectiveTier,
     isThinkingModel: isThinking,
     quotaPreference,
     explicitQuota,
