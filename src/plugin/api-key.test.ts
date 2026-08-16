@@ -300,8 +300,6 @@ describe("api-key agy sdk support", () => {
     expect(await readPreparedBody(prepared.init.body)).toEqual({
       contents: [],
       generationConfig: {
-        temperature: 0.7,
-        topP: 0.9,
         thinkingConfig: {
           thinkingLevel: "low",
           includeThoughts: true,
