@@ -74,7 +74,11 @@ import {
   modelsFromAntigravityAvailableModels,
   modelsFromGeminiApi,
 } from "./plugin/config/models";
-import { recordPublicGeminiApiModels } from "./plugin/model-catalog";
+import {
+  getCachedAntigravityAvailableModels,
+  recordAntigravityAvailableModels,
+  recordPublicGeminiApiModels,
+} from "./plugin/model-catalog";
 import type { AgySdkCredential } from "./plugin/api-key";
 import type {
   AuthDetails,
@@ -228,19 +232,59 @@ async function modelsFromOAuthAuth(
   client: PluginClient,
   providerId: string,
 ): Promise<Record<string, ProviderModel>> {
-  if (!config.model_discovery.enabled || !config.model_discovery.antigravity || !auth || !isOAuthAuth(auth)) return {};
+  if (!config.model_discovery.enabled || !config.model_discovery.antigravity) return {};
 
-  let accessToken = auth.access;
-  if (!accessToken || accessTokenExpired(auth)) {
-    const refreshed = await refreshAccessToken(auth, client, providerId);
+  let effectiveAuth = auth && isOAuthAuth(auth) ? auth : undefined;
+  if (!effectiveAuth && activeAccountManager) {
+    const accounts = activeAccountManager.getAccounts();
+    const activeAccount = accounts.find((a) => a.enabled !== false && a.parts?.refreshToken);
+    if (activeAccount) {
+      effectiveAuth = {
+        type: "oauth",
+        refresh: formatRefreshParts(activeAccount.parts),
+        access: activeAccount.access,
+        expires: activeAccount.expires,
+      };
+    }
+  }
+
+  if (!effectiveAuth) {
+    const cached = getCachedAntigravityAvailableModels();
+    if (cached) {
+      return modelsFromAntigravityAvailableModels(cached);
+    }
+    return {};
+  }
+
+  let accessToken = effectiveAuth.access;
+  if (!accessToken || accessTokenExpired(effectiveAuth)) {
+    const refreshed = await refreshAccessToken(effectiveAuth, client, providerId);
     accessToken = refreshed?.access;
   }
-  if (!accessToken) return {};
+  if (!accessToken) {
+    const cached = getCachedAntigravityAvailableModels();
+    if (cached) {
+      return modelsFromAntigravityAvailableModels(cached);
+    }
+    return {};
+  }
 
-  const parts = parseRefreshParts(auth.refresh);
+  const parts = parseRefreshParts(effectiveAuth.refresh);
   const projectId = parts.managedProjectId || parts.projectId || ANTIGRAVITY_DEFAULT_PROJECT_ID;
-  const response = await fetchAvailableModels(accessToken, projectId);
-  return modelsFromAntigravityAvailableModels(response.models ?? {});
+  try {
+    const response = await fetchAvailableModels(accessToken, projectId);
+    if (response.models) {
+      recordAntigravityAvailableModels(response.models);
+    }
+    return modelsFromAntigravityAvailableModels(response.models ?? {});
+  } catch (error) {
+    log.debug("fetchAvailableModels-failed", { error: String(error) });
+    const cached = getCachedAntigravityAvailableModels();
+    if (cached) {
+      return modelsFromAntigravityAvailableModels(cached);
+    }
+    return {};
+  }
 }
 
 function hasProviderModelRuntimeShape(model: ProviderModel | undefined): boolean {

@@ -118,6 +118,7 @@ opencode run "Hello" --model=google/antigravity-claude-opus-4-6-thinking --varia
 | `antigravity-gemini-3-flash` | minimal, low, medium, high | Gemini 3 Flash with thinking |
 | `antigravity-gemini-3.5-flash` | minimal, low, medium, high | Gemini 3.5 Flash with thinking (rollout-dependent) |
 | `antigravity-gemini-3.6-flash` | low, medium, high | Gemini 3.6 Flash with thinking (medium default) |
+| `antigravity-gemini-3.7-flash` | minimal, low, medium, high | Gemini 3.7 Flash with thinking |
 | `antigravity-claude-sonnet-4-6` | — | Claude Sonnet 4.6 |
 | `antigravity-claude-opus-4-6-thinking` | low, max | Claude Opus 4.6 with extended thinking |
 
@@ -135,6 +136,7 @@ The official Antigravity SDK uses `GEMINI_API_KEY` for local Gemini access. This
 | `gemini-3.5-flash` | Gemini 3.5 Flash (rollout-dependent) |
 | `gemini-3.5-flash-lite` | Gemini 3.5 Flash-Lite (minimal default) |
 | `gemini-3.6-flash` | Gemini 3.6 Flash (medium default) |
+| `gemini-3.7-flash` | Gemini 3.7 Flash |
 | `gemini-3-pro-preview` | Gemini 3 Pro (preview) |
 | `gemini-3.1-pro` | Gemini 3.1 Pro |
 | `gemini-3.1-pro-preview-customtools` | Gemini 3.1 Pro Preview Custom Tools |
@@ -217,6 +219,17 @@ Add this to your `~/.config/opencode/opencode.json`:
             "high": { "thinkingLevel": "high" }
           }
         },
+        "antigravity-gemini-3.7-flash": {
+          "name": "Gemini 3.7 Flash (Antigravity)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "minimal": { "thinkingLevel": "minimal" },
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
         "antigravity-claude-sonnet-4-6": {
           "name": "Claude Sonnet 4.6 (Antigravity)",
           "limit": { "context": 200000, "output": 64000 },
@@ -267,6 +280,17 @@ Add this to your `~/.config/opencode/opencode.json`:
           "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
           "variants": {
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
+        "gemini-3.7-flash": {
+          "name": "Gemini 3.7 Flash (Gemini CLI)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "minimal": { "thinkingLevel": "minimal" },
+            "low": { "thinkingLevel": "low" },
             "medium": { "thinkingLevel": "medium" },
             "high": { "thinkingLevel": "high" }
           }
@@ -761,14 +785,6 @@ See the full [Troubleshooting Guide](docs/TROUBLESHOOTING.md) for solutions to c
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — Common issues and fixes
 - [Architecture](docs/ARCHITECTURE.md) — How the plugin works
 - [API Spec](docs/ANTIGRAVITY_API_SPEC.md) — Antigravity API reference
-
----
-
-## Support
-
-If this plugin saves you time, consider supporting its development:
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S6S81QBOIR)
 
 ---
 

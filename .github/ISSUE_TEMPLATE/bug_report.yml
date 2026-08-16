@@ -44,6 +44,7 @@ body:
         - antigravity-gemini-3-pro
         - antigravity-gemini-3-flash
         - antigravity-gemini-3.6-flash
+        - antigravity-gemini-3.7-flash
         - antigravity-claude-sonnet-4-6
         - antigravity-claude-opus-4-6-thinking
         - gemini-2.5-flash
@@ -51,6 +52,7 @@ body:
         - gemini-3-flash-preview
         - gemini-3.5-flash-lite
         - gemini-3.6-flash
+        - gemini-3.7-flash
         - gemini-3-pro-preview
         - Other (specify in description)
         - Not applicable

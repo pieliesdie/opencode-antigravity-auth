@@ -106,6 +106,17 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
+  "antigravity-gemini-3.7-flash": {
+    name: "Gemini 3.7 Flash (Antigravity)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      minimal: { thinkingLevel: "minimal" },
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    },
+  },
   "antigravity-claude-sonnet-4-6": {
     name: "Claude Sonnet 4.6 (Antigravity)",
     limit: { context: 200000, output: 64000 },
@@ -162,6 +173,17 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
+  "gemini-3.7-flash": {
+    name: "Gemini 3.7 Flash (Gemini CLI)",
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      minimal: { thinkingLevel: "minimal" },
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    },
+  },
   "gemini-3-pro-preview": {
     name: "Gemini 3 Pro Preview (Gemini CLI)",
     limit: { context: 1048576, output: 65535 },
@@ -205,6 +227,33 @@ function defaultLimitForModel(modelId: string): ModelLimit {
   return { context: 1048576, output: 65536 };
 }
 
+function defaultVariantsForModel(modelId: string): Record<string, ModelVariant> | undefined {
+  const normalized = modelId.toLowerCase().replace(/^antigravity-/, "");
+  if (normalized.includes("claude") && normalized.includes("thinking")) {
+    return {
+      low: { thinkingConfig: { thinkingBudget: 8192 } },
+      max: { thinkingConfig: { thinkingBudget: 32768 } },
+    };
+  }
+  if (normalized.startsWith("gemini-3") || normalized.startsWith("gemini-2.5")) {
+    if (normalized.includes("pro")) {
+      return {
+        low: { thinkingLevel: "low" },
+        high: { thinkingLevel: "high" },
+      };
+    }
+    if (normalized.includes("flash")) {
+      return {
+        minimal: { thinkingLevel: "minimal" },
+        low: { thinkingLevel: "low" },
+        medium: { thinkingLevel: "medium" },
+        high: { thinkingLevel: "high" },
+      };
+    }
+  }
+  return undefined;
+}
+
 function mergeWithStaticDefinition(
   modelId: string,
   discovered: OpencodeModelDefinition,
@@ -217,7 +266,7 @@ function mergeWithStaticDefinition(
     ...discovered,
     limit: discovered.limit ?? existing.limit,
     modalities: discovered.modalities ?? existing.modalities,
-    variants: existing.variants,
+    variants: existing.variants ?? discovered.variants,
   };
 }
 
@@ -236,6 +285,7 @@ export function modelsFromGeminiApi(models: GeminiApiModel[]): OpencodeModelDefi
     const modelId = modelIdFromGeminiName(model.name) || model.baseModelId;
     if (!modelId) continue;
 
+    const variants = defaultVariantsForModel(modelId);
     const discovered: OpencodeModelDefinition = {
       name: model.displayName ? `${model.displayName} (Gemini API)` : `${titleFromModelId(modelId)} (Gemini API)`,
       limit: {
@@ -243,6 +293,7 @@ export function modelsFromGeminiApi(models: GeminiApiModel[]): OpencodeModelDefi
         output: model.outputTokenLimit ?? defaultLimitForModel(modelId).output,
       },
       modalities: DEFAULT_MODALITIES,
+      ...(variants ? { variants } : {}),
     };
     definitions[modelId] = mergeWithStaticDefinition(modelId, discovered);
   }
@@ -259,10 +310,12 @@ export function modelsFromAntigravityAvailableModels(
     const modelId = antigravityModelIdFromEntry(sourceId, entry);
     if (!modelId) continue;
 
+    const variants = defaultVariantsForModel(modelId);
     const discovered: OpencodeModelDefinition = {
       name: entry.displayName ? `${entry.displayName} (Antigravity)` : `${titleFromModelId(modelId)} (Antigravity)`,
       limit: defaultLimitForModel(modelId),
       modalities: DEFAULT_MODALITIES,
+      ...(variants ? { variants } : {}),
     };
     definitions[modelId] = mergeWithStaticDefinition(modelId, discovered);
   }

@@ -1,17 +1,14 @@
 /**
  * Live cache of the public Gemini API model catalog (`GET
- * generativelanguage.googleapis.com/v1beta/models`), sourced from the same
- * `fetchGeminiApiModels` call already made for `provider.models()` discovery.
+ * generativelanguage.googleapis.com/v1beta/models`) and the Antigravity model
+ * registry (`POST v1internal:fetchAvailableModels`), sourced from model discovery
+ * and quota fetches.
  *
- * This is the documented, stable, Google-maintained model registry — unlike
- * the Antigravity Code Assist internal backend ids (`gemini-3-flash-agent`,
- * `gemini-pro-agent`, ...), which are reverse-engineered and have repeatedly
- * drifted (multiple upstream PRs have each guessed differently at the right
- * id). Routing decisions that ask "does the public API actually serve this
- * model id" should prefer this live data over a hardcoded allow/deny list,
- * which can only ever reflect what was true when it was last edited.
+ * Routing decisions and dynamic model resolution use this live data to discover
+ * new and updated models directly from Google's registries without requiring manual
+ * plugin updates.
  */
-import type { GeminiApiModel } from "./config/models";
+import type { AntigravityAvailableModels, GeminiApiModel } from "./config/models";
 
 const CATALOG_TTL_MS = 60 * 60 * 1000;
 
@@ -20,7 +17,13 @@ interface PublicModelCatalog {
   fetchedAt: number;
 }
 
+interface AntigravityModelCatalog {
+  models: AntigravityAvailableModels;
+  fetchedAt: number;
+}
+
 let catalog: PublicModelCatalog | undefined;
+let antigravityCatalog: AntigravityModelCatalog | undefined;
 
 function modelIdFromName(model: GeminiApiModel): string | null {
   const raw = (model.name ? model.name.replace(/^models\//, "") : model.baseModelId)?.trim();
@@ -52,6 +55,37 @@ export function getPublicGeminiApiModelIds(): ReadonlySet<string> | undefined {
   return catalog.ids;
 }
 
+/**
+ * Records available models from the Antigravity model registry (`fetchAvailableModels`).
+ * Called as a side effect of quota checks and model discovery.
+ */
+export function recordAntigravityAvailableModels(models: AntigravityAvailableModels): void {
+  if (!models || Object.keys(models).length === 0) return;
+  antigravityCatalog = {
+    models: { ...models },
+    fetchedAt: Date.now(),
+  };
+}
+
+/**
+ * Returns the cached Antigravity available models, or `undefined` when no catalog
+ * has been fetched yet or the cached one is stale.
+ */
+export function getCachedAntigravityAvailableModels(): AntigravityAvailableModels | undefined {
+  if (!antigravityCatalog) return undefined;
+  if (Date.now() - antigravityCatalog.fetchedAt > CATALOG_TTL_MS) return undefined;
+  return antigravityCatalog.models;
+}
+
 export function resetPublicGeminiApiModelCatalogForTests(): void {
   catalog = undefined;
+}
+
+export function resetAntigravityModelCatalogForTests(): void {
+  antigravityCatalog = undefined;
+}
+
+export function resetModelCatalogsForTests(): void {
+  catalog = undefined;
+  antigravityCatalog = undefined;
 }

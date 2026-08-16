@@ -131,9 +131,72 @@ describe("createAntigravityPlugin provider models", () => {
         temperature: false,
         reasoning: true,
       });
+      expect(models?.["antigravity-gemini-3.7-flash"]?.capabilities).toMatchObject({
+        reasoning: true,
+      });
+      expect(models?.["gemini-3.7-flash"]?.capabilities).toMatchObject({
+        reasoning: true,
+      });
       expect(models?.["gemini-3.5-flash-lite"]?.capabilities).toMatchObject({
         temperature: false,
         reasoning: true,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("pulls dynamically discovered models from the Antigravity registry and caches them", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("fetchAvailableModels")) {
+        return new Response(JSON.stringify({
+          models: {
+            "gemini-3.7-flash": {
+              displayName: "Gemini 3.7 Flash",
+              modelName: "gemini-3.7-flash",
+            },
+            "gemini-3.9-flash": {
+              displayName: "Gemini 3.9 Flash (Registry)",
+              modelName: "gemini-3.9-flash",
+            },
+          },
+        }));
+      }
+      return new Response("1.2.3");
+    }));
+
+    try {
+      const plugin = await createAntigravityPlugin("google")({
+        client,
+        directory: process.cwd(),
+      });
+
+      const models = await plugin.provider?.models?.(
+        {
+          id: "google",
+          api: "https://generativelanguage.googleapis.com/v1beta",
+          npm: "@ai-sdk/google",
+          models: {},
+        },
+        {
+          auth: {
+            type: "oauth",
+            access: "valid-token",
+            refresh: "refresh-token|project=proj-1",
+            expires: Date.now() + 3600_000,
+          },
+        },
+      );
+
+      expect(models?.["antigravity-gemini-3.7-flash"]).toBeDefined();
+      expect(models?.["antigravity-gemini-3.9-flash"]).toMatchObject({
+        id: "antigravity-gemini-3.9-flash",
+        name: "Gemini 3.9 Flash (Registry) (Antigravity)",
+        capabilities: {
+          reasoning: true,
+          toolcall: true,
+        },
       });
     } finally {
       vi.unstubAllGlobals();
