@@ -435,6 +435,62 @@ describe("transform/gemini", () => {
       normalizeGeminiTools(payload);
       expect((payload.tools as unknown[])[0]).not.toHaveProperty("custom");
     });
+
+    it("normalizes pre-wrapped functionDeclarations format without counting as missing schema", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "bash",
+                description: "Run shell command",
+                parameters: {
+                  type: "object",
+                  properties: { command: { type: "string" } },
+                  required: ["command"],
+                },
+              },
+              {
+                name: "read",
+                description: "Read file",
+                parameters: {
+                  type: "object",
+                  properties: { filePath: { type: "string" } },
+                  required: ["filePath"],
+                },
+              },
+            ],
+          },
+        ],
+      };
+      const result = normalizeGeminiTools(payload);
+      expect(result.toolDebugMissing).toBe(0);
+      expect(result.toolDebugSummaries).toHaveLength(2);
+      expect(result.toolDebugSummaries[0]).toBe("decl=bash,src=functionDeclarations,hasSchema=y");
+      expect(result.toolDebugSummaries[1]).toBe("decl=read,src=functionDeclarations,hasSchema=y");
+
+      const wrapper = (payload.tools as any[])[0];
+      expect(wrapper.functionDeclarations[0].parameters.type).toBe("OBJECT");
+      expect(wrapper).not.toHaveProperty("parameters");
+      expect(wrapper).not.toHaveProperty("custom");
+    });
+
+    it("detects missing schemas inside functionDeclarations wrapper", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [
+          {
+            functionDeclarations: [
+              { name: "tool_without_schema" },
+            ],
+          },
+        ],
+      };
+      const result = normalizeGeminiTools(payload);
+      expect(result.toolDebugMissing).toBe(1);
+      expect(result.toolDebugSummaries[0]).toBe("decl=tool_without_schema,src=functionDeclarations,hasSchema=n");
+    });
   });
 
   describe("applyGeminiTransforms", () => {
