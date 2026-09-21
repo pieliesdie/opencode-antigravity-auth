@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2] - 2026-09-21
+
+### Changed
+
+- **Gemini Function Declarations** - Normalized `functionDeclarations` tool payloads for Gemini requests.
+- **Gemini Flash Alias** - Updated the `gemini-flash-latest` alias to target Gemini 3.8 Flash.
+
 ## [1.6.1] - 2026-08-16
 
 ### Added

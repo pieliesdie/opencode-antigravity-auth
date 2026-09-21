@@ -53,9 +53,9 @@ describe("resolveModelWithTier", () => {
       expect(result.quotaPreference).toBe("antigravity");
     });
 
-    it("gemini-flash-latest aliases to Gemini 3.7 Flash with default medium thinking", () => {
+    it("gemini-flash-latest aliases to Gemini 3.8 Flash with default medium thinking", () => {
       const result = resolveModelWithTier("gemini-flash-latest");
-      expect(result.actualModel).toBe("gemini-3.7-flash");
+      expect(result.actualModel).toBe("gemini-3.8-flash");
       expect(result.thinkingLevel).toBe("medium");
       expect(result.quotaPreference).toBe("antigravity");
     });
@@ -633,7 +633,7 @@ describe("Issue #103: resolveModelForHeaderStyle", () => {
         "gemini-flash-latest",
         "gemini-cli",
       );
-      expect(result.actualModel).toBe("gemini-3.7-flash");
+      expect(result.actualModel).toBe("gemini-3.8-flash");
       expect(result.thinkingLevel).toBe("medium");
       expect(result.quotaPreference).toBe("gemini-cli");
     });
