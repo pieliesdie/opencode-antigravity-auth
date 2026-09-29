@@ -1441,7 +1441,7 @@ export function deepFilterThinkingBlocks(
  * thinking parts (type: "thinking") to reasoning format.
  * Claude responses through Antigravity may use candidates structure with Anthropic-style parts.
  */
-function transformGeminiCandidate(candidate: any): any {
+function transformGeminiCandidate(candidate: any, repairToolArgs: boolean): any {
   if (!candidate || typeof candidate !== "object") {
     return candidate;
   }
@@ -1507,9 +1507,12 @@ function transformGeminiCandidate(candidate: any): any {
     // Fix: When Claude calls a tool with no parameters, args may be undefined.
     // opencode expects state.input to be a record, so we must ensure args: {} as fallback.
     if (part.functionCall) {
-      const parsedArgs = part.functionCall.args
-        ? recursivelyParseJsonStrings(part.functionCall.args)
-        : {};
+      const args = part.functionCall.args
+      const parsedArgs = !args
+        ? {}
+        : repairToolArgs
+          ? recursivelyParseJsonStrings(args)
+          : args
       return {
         ...part,
         functionCall: {
@@ -1545,11 +1548,12 @@ function transformGeminiCandidate(candidate: any): any {
  * Handles both Gemini-style (thought: true) and Anthropic-style (type: "thinking") formats.
  * Also extracts reasoning_content for Anthropic-style responses.
  */
-export function transformThinkingParts(response: unknown): unknown {
+export function transformThinkingParts(response: unknown, options: { repairToolArgs?: boolean } = {}): unknown {
   if (!response || typeof response !== "object") {
     return response;
   }
 
+  const repairToolArgs = options.repairToolArgs ?? true
   const resp = response as Record<string, unknown>;
   const result: Record<string, unknown> = { ...resp };
   const reasoningTexts: string[] = [];
@@ -1588,7 +1592,7 @@ export function transformThinkingParts(response: unknown): unknown {
 
   // Handle Gemini-style candidates array
   if (Array.isArray(resp.candidates)) {
-    result.candidates = resp.candidates.map(transformGeminiCandidate);
+    result.candidates = resp.candidates.map((c) => transformGeminiCandidate(c, repairToolArgs));
   }
 
   // Add reasoning_content if we found any thinking blocks (for Anthropic-style)

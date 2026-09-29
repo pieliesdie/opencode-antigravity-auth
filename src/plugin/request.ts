@@ -8,7 +8,6 @@ import {
   SKIP_THOUGHT_SIGNATURE,
   MIN_SIGNATURE_LENGTH,
   ANTIGRAVITY_CLI_USER_AGENT,
-  getRandomizedHeaders,
   type HeaderStyle,
 } from "../constants";
 import { cacheSignature, getCachedSignature } from "./cache";
@@ -82,8 +81,6 @@ import {
 } from "./transform";
 import { detectErrorType } from "./recovery";
 import {
-  getSessionFingerprint,
-  buildFingerprintHeaders,
   type Fingerprint,
 } from "./fingerprint";
 import type { GoogleSearchConfig } from "./transform/types";
@@ -1386,6 +1383,9 @@ export function prepareAntigravityRequest(
             effectiveModel = proModel;
             wrappedBody.model = proModel;
           }
+          if (effectiveModel === "gemini-3.1-pro-high") {
+            wrappedBody.model = "gemini-pro-agent";
+          }
         }
 
         const conversationKey =
@@ -2272,7 +2272,11 @@ export function prepareAntigravityRequest(
 
         const wrappedBody: Record<string, unknown> = {
           project: effectiveProjectId,
-          model: effectiveModel,
+          model:
+            headerStyle === "antigravity" &&
+            effectiveModel === "gemini-3.1-pro-high"
+              ? "gemini-pro-agent"
+              : effectiveModel,
           request: requestPayload,
         };
 
@@ -2472,7 +2476,13 @@ export async function transformAntigravityResponse(
       : getKeepThinking()
         ? SYNTHETIC_THINKING_PLACEHOLDER
         : undefined;
-  const cacheSignatures = shouldCacheThinkingSignatures(effectiveModel);
+  const cacheSignatures = shouldCacheThinkingSignatures(effectiveModel)
+
+  // Gemini models sometimes return double-encoded JSON in tool call args; Claude
+  // models never do (and fixing them breaks string args like shell commands).
+  const responseModel = effectiveModel ?? requestedModel
+  const repairToolArgs = !responseModel || isClaudeModel(responseModel)
+  const transformParts = (body: unknown) => transformThinkingParts(body, { repairToolArgs })
 
   if (!isJsonResponse && !isEventStreamResponse) {
     logAntigravityDebugResponse(debugContext, response, {
@@ -2497,7 +2507,7 @@ export async function transformAntigravityResponse(
         onCacheSignature: cacheSignature,
         onInjectDebug: injectDebugThinking,
         // onInjectSyntheticThinking removed - keep_thinking now uses debugText path
-        transformThinkingParts,
+        transformThinkingParts: transformParts,
       },
       {
         signatureSessionKey: sessionId,
@@ -2691,7 +2701,7 @@ export async function transformAntigravityResponse(
       if (debugText) {
         responseBody = injectDebugThinking(responseBody, debugText);
       }
-      const transformed = transformThinkingParts(responseBody);
+      const transformed = transformParts(responseBody);
       return new Response(JSON.stringify(transformed), init);
     }
 

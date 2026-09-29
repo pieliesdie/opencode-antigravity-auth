@@ -847,6 +847,93 @@ describe("transformThinkingParts", () => {
     const result = transformThinkingParts(response) as any;
     expect(result.candidates[0].content.parts[0].providerMetadata).toBeUndefined();
   });
+
+  describe("repairToolArgs option", () => {
+    it("passes Gemini tool-call string args through unchanged when repairToolArgs: false", () => {
+      const response = {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    name: "bash",
+                    args: { command: "printf 'a\\nb'" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      const result = transformThinkingParts(response, { repairToolArgs: false }) as any
+      expect(result.candidates[0].content.parts[0].functionCall.args.command).toBe("printf 'a\\nb'")
+    })
+
+    it("passes numbered task string args through unchanged when repairToolArgs: false", () => {
+      const response = {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    name: "todo_write",
+                    args: { todos: "[1] Audit files" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      const result = transformThinkingParts(response, { repairToolArgs: false }) as any
+      expect(result.candidates[0].content.parts[0].functionCall.args.todos).toBe("[1] Audit files")
+    })
+
+    it("defaults missing args to {} when repairToolArgs: false", () => {
+      const response = {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    name: "no_params_tool",
+                    args: undefined,
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      const result = transformThinkingParts(response, { repairToolArgs: false }) as any
+      expect(result.candidates[0].content.parts[0].functionCall.args).toEqual({})
+    })
+
+    it("repairs double-encoded JSON args by default (repairToolArgs: true)", () => {
+      // "files" is not in SKIP_PARSE_KEYS so it will be parsed
+      const response = {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    name: "glob",
+                    args: { files: "[\"a.ts\",\"b.ts\"]" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      const result = transformThinkingParts(response) as any
+      expect(result.candidates[0].content.parts[0].functionCall.args.files).toEqual(["a.ts", "b.ts"])
+    })
+  })
 });
 
 describe("normalizeThinkingConfig", () => {
