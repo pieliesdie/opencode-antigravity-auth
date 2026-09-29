@@ -172,6 +172,14 @@ export function toGeminiSchema(schema: unknown): unknown {
       continue;
     }
 
+    if (
+      key === "enum" &&
+      Array.isArray(value) &&
+      value.some((item) => typeof item !== "string")
+    ) {
+      continue;
+    }
+
     if (key === "type" && typeof value === "string") {
       // Convert type to uppercase for Gemini API
       result[key] = value.toUpperCase();

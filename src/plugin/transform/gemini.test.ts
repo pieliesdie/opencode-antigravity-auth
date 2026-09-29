@@ -331,6 +331,28 @@ describe("transform/gemini", () => {
       expect(result.toolDebugMissing).toBe(0);
     });
 
+    it("removes invalid enums from pre-wrapped function declaration schemas", () => {
+      const payload: RequestPayload = {
+        contents: [],
+        tools: [{
+          functionDeclarations: [{
+            name: "marketplace_manage",
+            parameters: {
+              type: "object",
+              properties: {
+                acknowledge_other_projects: { type: "boolean", enum: [true] },
+              },
+            },
+          }],
+        }],
+      };
+
+      normalizeGeminiTools(payload);
+
+      const declaration = (payload.tools as Array<{ functionDeclarations: Array<{ parameters: { properties: Record<string, Record<string, unknown>> } }> }>)[0]!.functionDeclarations[0]!;
+      expect(declaration.parameters.properties.acknowledge_other_projects).toEqual({ type: "BOOLEAN" });
+    });
+
     it("creates custom from function and strips it for Gemini", () => {
       const payload: RequestPayload = {
         contents: [],
@@ -838,6 +860,16 @@ describe("transform/gemini", () => {
       expect(toGeminiSchema({ type: "array" })).toEqual({
         type: "ARRAY",
         items: { type: "STRING" },
+      });
+    });
+
+    it("omits non-string enums while preserving types and valid string enums", () => {
+      expect(toGeminiSchema({ type: "boolean", enum: [true] })).toEqual({ type: "BOOLEAN" });
+      expect(toGeminiSchema({ type: "number", enum: [1, 2] })).toEqual({ type: "NUMBER" });
+      expect(toGeminiSchema({ enum: [true] })).toEqual({});
+      expect(toGeminiSchema({ type: "string", enum: ["yes", "no"] })).toEqual({
+        type: "STRING",
+        enum: ["yes", "no"],
       });
     });
 
