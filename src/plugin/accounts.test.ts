@@ -16,6 +16,15 @@ vi.mock("./storage", async (importOriginal) => {
   };
 });
 
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  if (!resolve) throw new Error("Deferred promise resolver was not initialized");
+  return { promise, resolve };
+}
+
 describe("AccountManager", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -57,6 +66,78 @@ describe("AccountManager", () => {
 
     expect(account).not.toBeNull();
     expect(account?.index).toBe(0);
+  });
+
+  it("prefers the OAuth account over the persisted active account for both families", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+      activeIndexByFamily: { claude: 0, gemini: 0 },
+    };
+
+    const manager = new AccountManager(undefined, stored);
+
+    expect(manager.setPreferredAccount("r2")).toBe(true);
+    expect(manager.getCurrentOrNextForFamily("claude")?.parts.refreshToken).toBe("r2");
+    expect(manager.getCurrentOrNextForFamily("gemini")?.parts.refreshToken).toBe("r2");
+  });
+
+  it("keeps the persisted account when the OAuth account is disabled", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0, enabled: false },
+      ],
+      activeIndex: 0,
+    };
+
+    const manager = new AccountManager(undefined, stored);
+
+    expect(manager.setPreferredAccount("r2")).toBe(false);
+    expect(manager.getCurrentOrNextForFamily("claude")?.parts.refreshToken).toBe("r1");
+    expect(manager.getCurrentOrNextForFamily("gemini")?.parts.refreshToken).toBe("r1");
+  });
+
+  it("falls back from the OAuth account when it is cooling down", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+
+    const manager = new AccountManager(undefined, stored);
+    manager.markAccountCoolingDown(manager.getAccounts()[1]!, 60_000, "auth-failure");
+
+    expect(manager.setPreferredAccount("r2")).toBe(true);
+    expect(manager.getCurrentOrNextForFamily("claude")?.parts.refreshToken).toBe("r1");
+    expect(manager.getCurrentOrNextForFamily("gemini")?.parts.refreshToken).toBe("r1");
+  });
+
+  it("falls back per family when the OAuth account is rate-limited", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+
+    const manager = new AccountManager(undefined, stored);
+    const oauthAccount = manager.getAccounts()[1]!;
+    manager.markRateLimited(oauthAccount, 60_000, "claude");
+
+    expect(manager.setPreferredAccount("r2")).toBe(true);
+    expect(manager.getCurrentOrNextForFamily("claude")?.parts.refreshToken).toBe("r1");
+    expect(manager.getCurrentOrNextForFamily("gemini")?.parts.refreshToken).toBe("r2");
   });
 
   it("switches to next account when current is rate-limited for family", () => {
@@ -1177,7 +1258,7 @@ describe("AccountManager", () => {
     });
 
     it("waits for an in-flight save before persisting a revoked-account removal", async () => {
-      const staleSave = Promise.withResolvers<void>();
+      const staleSave = createDeferred<void>();
       vi.mocked(storageModule.saveAccounts).mockImplementationOnce(async () => staleSave.promise);
       vi.mocked(storageModule.removeAccountFromStorage).mockClear();
       const stored: AccountStorageV4 = {

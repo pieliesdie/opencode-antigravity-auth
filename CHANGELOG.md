@@ -11,6 +11,8 @@
 
 ### Added
 
+- **OpenCode v2 support** - Added the v2 setup entrypoint, OAuth integration, API-key authentication, model and thinking-variant registration, Google Search tool, and interrupted-tool recovery. An explicit Google provider preserves the existing Antigravity transport and account rotation. Package exports retain the v1 server entrypoint and provide a separate legacy entrypoint for older hosts.
+
 - **Gemini 3.7 Flash** - Added stable `gemini-3.7-flash` and `antigravity-gemini-3.7-flash` model support with thinking variants (`minimal`, `low`, `medium`, `high`). The `gemini-flash-latest` alias now resolves to `gemini-3.7-flash`.
 - **Dynamic Antigravity Registry Pulling & Caching** - Discovered Antigravity models from `POST /v1internal:fetchAvailableModels` are now automatically cataloged, cached, and registered with dynamically inferred thinking variants for newly released models. When OpenCode initializes, model discovery can automatically authenticate using configured OAuth accounts to pull the latest models from the Antigravity registry.
 

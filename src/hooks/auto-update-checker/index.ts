@@ -36,6 +36,7 @@ export function createAutoUpdateCheckerHook(
   const { showStartupToast = true, autoUpdate = true } = options;
 
   let hasChecked = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   return {
     event: ({ event }: { event: PluginEvent }) => {
@@ -47,7 +48,8 @@ export function createAutoUpdateCheckerHook(
 
       hasChecked = true;
 
-      setTimeout(() => {
+      timer = setTimeout(() => {
+        timer = undefined;
         const localDevVersion = getLocalDevVersion(directory);
 
         if (localDevVersion) {
@@ -62,6 +64,10 @@ export function createAutoUpdateCheckerHook(
           logAutoUpdate(`Background update check failed: ${err}`);
         });
       }, 0);
+    },
+    dispose: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
     },
   };
 }

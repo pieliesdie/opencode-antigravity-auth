@@ -1,4 +1,4 @@
-import type { PluginInput } from "@opencode-ai/plugin";
+import type { PluginInput, ToolDefinition } from "@opencode-ai/plugin";
 import type { AntigravityTokenExchangeResult } from "../antigravity/oauth";
 
 export interface OAuthAuthDetails {
@@ -48,11 +48,17 @@ export interface LoaderResult {
   fetch(input: RequestInfo, init?: RequestInit): Promise<Response>;
 }
 
-export type PluginClient = PluginInput["client"];
+export type PluginClient = {
+  app: Pick<PluginInput["client"]["app"], "log">;
+  tui: Pick<PluginInput["client"]["tui"], "showToast">;
+  auth: Pick<PluginInput["client"]["auth"], "set">;
+  session: Pick<PluginInput["client"]["session"], "prompt" | "abort" | "messages">;
+};
 
 export interface PluginContext {
   client: PluginClient;
   directory: string;
+  runtime?: "v1" | "v2";
 }
 
 export type AuthPrompt =
@@ -105,8 +111,9 @@ export interface PluginResult {
     methods: AuthMethod[];
   };
   event?: (payload: PluginEventPayload) => void;
-  tool?: Record<string, unknown>;
+  tool?: Record<string, ToolDefinition>;
   provider?: ProviderHook;
+  dispose?: () => void;
 }
 
 export interface RefreshParts {

@@ -595,6 +595,32 @@ export class AccountManager {
     }));
   }
 
+  /**
+   * Prefer the account that supplied the active OAuth credential.
+   *
+   * This is an in-memory selection only. A disabled account cannot be preferred;
+   * cooldown and quota fallback remain the responsibility of
+   * getCurrentOrNextForFamily(), where they are evaluated per family, model, and
+   * header style.
+   */
+  setPreferredAccount(refreshToken: string): boolean {
+    const account = this.accounts.find((candidate) =>
+      candidate.parts.refreshToken === refreshToken &&
+      candidate.enabled !== false
+    );
+
+    if (!account) {
+      return false;
+    }
+
+    this.cursor = account.index;
+    this.currentAccountIndexByFamily.claude = account.index;
+    this.currentAccountIndexByFamily.gemini = account.index;
+    this.sessionOffsetApplied.claude = true;
+    this.sessionOffsetApplied.gemini = true;
+    return true;
+  }
+
   getCurrentAccountForFamily(family: ModelFamily): ManagedAccount | null {
     const currentIndex = this.currentAccountIndexByFamily[family];
     if (currentIndex >= 0 && currentIndex < this.accounts.length) {

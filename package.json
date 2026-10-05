@@ -5,6 +5,20 @@
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        },
+        "./v1": {
+            "types": "./dist/v1.d.ts",
+            "import": "./dist/v1.js"
+        },
+        "./server": {
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.js"
+        }
+    },
     "license": "MIT",
     "author": "pieliesdie",
     "repository": {
@@ -59,8 +73,10 @@
         "zod-to-json-schema": "^3.25.2"
     },
     "dependencies": {
+        "@ai-sdk/google": "3.0.24",
         "@openauthjs/openauth": "^0.4.3",
         "@opencode-ai/plugin": "^0.15.31",
+        "@opencode/plugin": "2.0.22",
         "proper-lockfile": "^4.1.2",
         "xdg-basedir": "^5.1.0",
         "zod": "^4.4.3"

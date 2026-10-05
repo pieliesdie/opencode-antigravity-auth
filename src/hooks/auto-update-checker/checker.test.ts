@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -58,6 +61,15 @@ describe("isLocalDevMode / getLocalDevPath", () => {
     );
     const result = getLocalDevPath("/project");
     expect(result).toContain("opencode-antigravity-auth");
+  });
+
+  it("returns an absolute V2 local dist path for the package", async () => {
+    const { getLocalDevPath } = await import("./checker");
+    fsMock.existsSync.mockImplementation((p: string) => p.endsWith("opencode.json"));
+    fsMock.readFileSync.mockReturnValue(
+      JSON.stringify({ plugins: ["/workspace/opencode-antigravity-auth/dist"] }),
+    );
+    expect(getLocalDevPath("/project")).toBe("/workspace/opencode-antigravity-auth/dist");
   });
 
   it("handles JSONC config with comments and trailing commas", async () => {
@@ -130,5 +142,153 @@ describe("findPluginEntry", () => {
     const result = findPluginEntry("/project");
     expect(result!.isPinned).toBe(false);
     expect(result!.pinnedVersion).toBeNull();
+  });
+});
+
+describe("OpenCode V2 plugins JSONC", () => {
+  let directory: string;
+  let configPath: string;
+
+  beforeEach(async () => {
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    directory = await mkdtemp(join(tmpdir(), "antigravity-v2-config-"));
+    const configDirectory = join(directory, ".opencode");
+    await mkdir(configDirectory);
+    configPath = join(configDirectory, "opencode.jsonc");
+  });
+
+  afterEach(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("finds and updates a pinned V2 object entry while preserving its options and unrelated strings", async () => {
+    await writeFile(configPath, `{
+  // V2 package object
+  "plugins": [
+    {
+      "package": "opencode-antigravity-auth@1.5.0",
+      "options": {
+        "enabled": true,
+        "pinnedReference": "opencode-antigravity-auth@1.5.0"
+      }
+    },
+  ],
+  "note": "opencode-antigravity-auth@1.5.0"
+}
+`);
+    const { findPluginEntry, updatePinnedVersion } = await import("./checker");
+
+    expect(findPluginEntry(directory)).toMatchObject({
+      entry: "opencode-antigravity-auth@1.5.0",
+      isPinned: true,
+      pinnedVersion: "1.5.0",
+      configPath,
+    });
+    expect(updatePinnedVersion(configPath, "opencode-antigravity-auth@1.5.0", "2.0.0")).toBe(true);
+
+    const updated = await readFile(configPath, "utf-8");
+    expect(updated).toContain('"package": "opencode-antigravity-auth@2.0.0"');
+    expect(updated).toContain('"enabled": true');
+    expect(updated).toContain('"pinnedReference": "opencode-antigravity-auth@1.5.0"');
+    expect(updated).toContain('"note": "opencode-antigravity-auth@1.5.0"');
+  });
+
+  it("updates pinned V2 string entries", async () => {
+    await writeFile(configPath, `{
+  "plugins": [
+    "other-plugin@1.0.0",
+    "opencode-antigravity-auth@1.5.0",
+  ],
+}
+`);
+    const { findPluginEntry, updatePinnedVersion } = await import("./checker");
+
+    expect(findPluginEntry(directory)?.pinnedVersion).toBe("1.5.0");
+    expect(updatePinnedVersion(configPath, "opencode-antigravity-auth@1.5.0", "2.0.0")).toBe(true);
+    expect(await readFile(configPath, "utf-8")).toContain('"opencode-antigravity-auth@2.0.0"');
+  });
+
+  it("retains V1 tuple entries when locating and updating a pinned package", async () => {
+    await writeFile(configPath, `{
+  "plugin": [
+    ["opencode-antigravity-auth@1.5.0", { "enabled": true }],
+  ],
+}
+`);
+    const { findPluginEntry, updatePinnedVersion } = await import("./checker");
+
+    expect(findPluginEntry(directory)?.pinnedVersion).toBe("1.5.0");
+    expect(updatePinnedVersion(configPath, "opencode-antigravity-auth@1.5.0", "2.0.0")).toBe(true);
+    const updated = await readFile(configPath, "utf-8");
+    expect(updated).toContain('["opencode-antigravity-auth@2.0.0", { "enabled": true }]');
+  });
+
+  it("does not update matching strings outside a plugin array", async () => {
+    const content = `{
+  "plugins": ["other-plugin@1.0.0"],
+  "note": "opencode-antigravity-auth@1.5.0",
+  "metadata": { "package": "opencode-antigravity-auth@1.5.0" }
+}
+`;
+    await writeFile(configPath, content);
+    const { updatePinnedVersion } = await import("./checker");
+
+    expect(updatePinnedVersion(configPath, "opencode-antigravity-auth@1.5.0", "2.0.0")).toBe(false);
+    await expect(readFile(configPath, "utf-8")).resolves.toBe(content);
+  });
+
+  it("ignores commented and nested plugins arrays before the top-level V2 array", async () => {
+    await writeFile(configPath, `{
+  // "plugins": ["opencode-antigravity-auth@0.1.0"],
+  "options": {
+    "plugins": ["opencode-antigravity-auth@0.2.0"]
+  },
+  "plugins": ["opencode-antigravity-auth@1.5.0"]
+}
+`);
+    const { findPluginEntry, updatePinnedVersion } = await import("./checker");
+
+    expect(findPluginEntry(directory)?.pinnedVersion).toBe("1.5.0");
+    expect(updatePinnedVersion(configPath, "opencode-antigravity-auth@1.5.0", "2.0.0")).toBe(true);
+    const updated = await readFile(configPath, "utf-8");
+    expect(updated).toContain('// "plugins": ["opencode-antigravity-auth@0.1.0"],');
+    expect(updated).toContain('"plugins": ["opencode-antigravity-auth@0.2.0"]');
+    expect(updated).toContain('"plugins": ["opencode-antigravity-auth@2.0.0"]');
+  });
+
+  it("skips a commented matching string before a V2 plugin entry", async () => {
+    await writeFile(configPath, `{
+  "plugins": [
+    // "opencode-antigravity-auth@1.5.0",
+    "opencode-antigravity-auth@1.5.0"
+  ]
+}
+`);
+    const { updatePinnedVersion } = await import("./checker");
+
+    expect(updatePinnedVersion(configPath, "opencode-antigravity-auth@1.5.0", "2.0.0")).toBe(true);
+    const updated = await readFile(configPath, "utf-8");
+    expect(updated).toContain('// "opencode-antigravity-auth@1.5.0",');
+    expect(updated).toContain('"opencode-antigravity-auth@2.0.0"');
+  });
+
+  it("skips a commented matching string before a V1 tuple package", async () => {
+    await writeFile(configPath, `{
+  "plugin": [
+    [
+      // "opencode-antigravity-auth@1.5.0",
+      "opencode-antigravity-auth@1.5.0",
+      { "enabled": true }
+    ]
+  ]
+}
+`);
+    const { updatePinnedVersion } = await import("./checker");
+
+    expect(updatePinnedVersion(configPath, "opencode-antigravity-auth@1.5.0", "2.0.0")).toBe(true);
+    const updated = await readFile(configPath, "utf-8");
+    expect(updated).toContain('// "opencode-antigravity-auth@1.5.0",');
+    expect(updated).toContain('"opencode-antigravity-auth@2.0.0",');
   });
 });

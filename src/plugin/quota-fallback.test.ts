@@ -59,6 +59,15 @@ let createSoftQuotaBlockedResponse: CreateSoftQuotaBlockedResponse | undefined;
 let tryFetchWithAgySdkCredentials: TryFetchWithAgySdkCredentials | undefined;
 let verifyAccountAccess: VerifyAccountAccess | undefined;
 
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  if (!resolve) throw new Error("Deferred promise resolver was not initialized");
+  return { promise, resolve };
+}
+
 beforeAll(async () => {
   vi.mock("@opencode-ai/plugin", () => ({
     tool: vi.fn(),
@@ -116,8 +125,8 @@ describe("API-key fallback credentials", () => {
 
   it("tries every available key when concurrent requests advance the shared cursor", async () => {
     resetAgySdkCredentialStateForTests();
-    const badRequestStarted = Promise.withResolvers<void>();
-    const releaseBadRequest = Promise.withResolvers<void>();
+    const badRequestStarted = createDeferred<void>();
+    const releaseBadRequest = createDeferred<void>();
     const fetchMock = vi.fn(async (_input: RequestInfo, init?: RequestInit) => {
       const apiKey = new Headers(init?.headers).get("x-goog-api-key");
       if (apiKey === "bad-key") {

@@ -37,6 +37,24 @@ Enable Opencode to authenticate against **Antigravity** (Google's IDE) via OAuth
 
 ## Installation
 
+### OpenCode v2
+
+This branch supports OpenCode **2.0.22** through the v2 plugin API. It registers Google OAuth, Gemini API keys, models, thinking variants, and `google_search`, while sharing the existing request transformation and multi-account quota routing.
+
+For a local checkout, build it with `npm ci && npm run build`, then add its **directory** to your OpenCode configuration:
+
+```json
+{
+  "plugins": ["/absolute/path/to/opencode-antigravity-auth/dist"]
+}
+```
+
+Run `opencode auth login` or `/connect`, choose Google, then **OAuth with Google (Antigravity)**. Repeat the connection flow to add another Google account. Select **Paste the redirect URL manually** for a remote or headless setup. Existing `antigravity.json` settings and account storage continue to work.
+
+V2 registers model definitions automatically; existing v1 provider/model configuration is also normalized by OpenCode. Notifications use the server log output because v2 has no server-side TUI toast API. Interrupted tool calls are repaired in the v2 request context; v1 session files are not modified.
+
+The default package export also supports OpenCode v1 **1.18.29 and newer**. Older v1 hosts can load the built `dist/v1.js` entrypoint through a `file:///absolute/path/to/dist/v1.js` entry in their `plugin` array. The installation examples below use the v2 `plugins` array; use `plugin` on v1. The v2 implementation must be released before it is available through the published `@latest` tag.
+
 <details open>
 <summary><b>For Humans</b></summary>
 
@@ -54,7 +72,7 @@ Install the @pieliesdie/opencode-antigravity-auth plugin and add the Antigravity
 
    ```json
    {
-     "plugin": ["@pieliesdie/opencode-antigravity-auth@latest"]
+     "plugins": ["@pieliesdie/opencode-antigravity-auth@latest"]
    }
    ```
 
@@ -87,7 +105,7 @@ Install the @pieliesdie/opencode-antigravity-auth plugin and add the Antigravity
    
    > **Note**: This path works on all platforms. On Windows, `~` resolves to your user home directory (e.g., `C:\Users\YourName`).
 
-2. Add the plugin to the `plugin` array
+2. Add the plugin to the `plugins` array (`plugin` on OpenCode v1)
 
 3. Add the model definitions from the [Full models configuration](#models) section
 
@@ -165,7 +183,7 @@ Add this to your `~/.config/opencode/opencode.json`:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@pieliesdie/opencode-antigravity-auth@latest"],
+  "plugins": ["@pieliesdie/opencode-antigravity-auth@latest"],
   "provider": {
     "google": {
       "models": {
@@ -460,7 +478,7 @@ Invalid JSON payload received. Unknown name "parameters" at 'request.tools[0]'
 **Solutions:**
 1. **Update to latest beta:**
    ```json
-   { "plugin": ["@pieliesdie/opencode-antigravity-auth@beta"] }
+   { "plugins": ["@pieliesdie/opencode-antigravity-auth@beta"] }
    ```
 
 2. **Disable MCP servers** one-by-one to find the problematic one
@@ -613,24 +631,24 @@ ssh -L 51121:localhost:51121 user@remote
 
 ---
 
-### Configuration Key Typo: `plugin` not `plugins`
+### Configuration Key: `plugins` on v2, `plugin` on v1
 
-The correct key is `plugin` (singular):
+OpenCode v2 uses the `plugins` array:
 
 ```json
 {
-  "plugin": ["@pieliesdie/opencode-antigravity-auth@beta"]
+  "plugins": ["@pieliesdie/opencode-antigravity-auth@beta"]
 }
 ```
 
-**Not** `"plugins"` (will cause "Unrecognized key" error).
+OpenCode v1 uses `plugin` (singular). Choose the key for your installed OpenCode version.
 
 ---
 
 ### Migrating Accounts Between Machines
 
 When copying `antigravity-accounts.json` to a new machine:
-1. Ensure the plugin is installed: `"plugin": ["@pieliesdie/opencode-antigravity-auth@beta"]`
+1. Ensure the plugin is installed: `"plugin": ["@pieliesdie/opencode-antigravity-auth@beta"]` (v1) or `"plugins": ["@pieliesdie/opencode-antigravity-auth@beta"]` (v2)
 2. Copy `~/.config/opencode/antigravity-accounts.json`
 3. If you get "API key missing" error, the refresh token may be invalid — re-authenticate
 
@@ -647,7 +665,7 @@ DCP creates synthetic assistant messages that lack thinking blocks. **List this 
 
 ```json
 {
-  "plugin": [
+  "plugins": [
     "@pieliesdie/opencode-antigravity-auth@latest",
     "@tarquinen/opencode-dcp@latest"
   ]
