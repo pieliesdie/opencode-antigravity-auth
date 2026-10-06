@@ -1,6 +1,6 @@
 {
     "name": "@pieliesdie/opencode-antigravity-auth",
-    "version": "1.7.6",
+    "version": "2.0.0",
     "description": "Google Antigravity IDE OAuth auth plugin for Opencode - access Gemini 3 Pro and Claude 4.6 using Google credentials",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -48,7 +48,7 @@
         "LICENSE"
     ],
     "scripts": {
-        "build": "esbuild index.ts --bundle --format=esm --platform=node --outfile=dist/index.js --external:node: --external:proper-lockfile --external:xdg-basedir --external:zod --external:@openauthjs/openauth --sourcemap",
+        "build": "esbuild index=index.ts v1=v1.ts server=server.ts google-provider=src/google-provider.ts --bundle --format=esm --platform=node --outdir=dist --external:node: --external:proper-lockfile --external:xdg-basedir --external:zod --external:@openauthjs/openauth --sourcemap",
         "build:schema": "npx tsx script/build-schema.ts",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
