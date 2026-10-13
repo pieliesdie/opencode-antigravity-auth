@@ -1143,6 +1143,38 @@ interface PreparedAntigravityRequest {
   thinkingRecoveryMessage?: string;
 }
 
+/** Allowed outgoing request headers for Google / Antigravity APIs (strict whitelist). */
+const ALLOWED_HEADERS = new Set([
+  "authorization",
+  "content-type",
+  "accept",
+  "user-agent",
+  "anthropic-beta",
+  "x-goog-api-client",
+  "client-metadata",
+  "x-request-id",
+]);
+
+/**
+ * Filters headers to an allowlist of valid headers. Strips all host-app bookkeeping
+ * (x-opencode-*, x-stainless-*, session IDs, traceparent, b3, etc.), preventing
+ * traffic fingerprinting and header leakage to Google.
+ */
+export function filterAllowedHeaders(headers: Headers): void {
+  const names: string[] = [];
+  headers.forEach((_value, name) => {
+    names.push(name);
+  });
+  for (const name of names) {
+    if (!ALLOWED_HEADERS.has(name.toLowerCase())) {
+      headers.delete(name);
+    }
+  }
+}
+
+/** Backward-compatible alias for filterAllowedHeaders */
+export const stripHostClientHeaders = filterAllowedHeaders;
+
 export function prepareAntigravityRequest(
   input: string,
   init: RequestInit | undefined,
@@ -1247,6 +1279,7 @@ export function prepareAntigravityRequest(
   headers.set("Authorization", `Bearer ${accessToken}`);
   headers.delete("x-api-key");
   headers.delete("x-goog-api-key");
+  stripHostClientHeaders(headers);
   // Strip x-goog-user-project header to prevent 403 auth/license conflicts.
   // This header is added by OpenCode/AI SDK and can force project-level checks
   // that are not required for Antigravity/Gemini CLI OAuth requests.
@@ -2350,6 +2383,7 @@ export function prepareAntigravityRequest(
     headers.set("X-Goog-Api-Client", GEMINI_CLI_HEADERS["X-Goog-Api-Client"]);
     headers.set("Client-Metadata", GEMINI_CLI_HEADERS["Client-Metadata"]);
   }
+  filterAllowedHeaders(headers);
   return {
     request: transformedUrl,
     init: {

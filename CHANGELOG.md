@@ -1,9 +1,16 @@
 # Changelog
 
+## [2.0.4] - 2026-10-13
+
+### Changed
+
+- **Strict Header Allowlist** - Switched to a strict allowlist for outgoing request headers, dropping all host bookkeeping, telemetry, session affinity, and trace context headers before requests reach Google.
+
 ## [2.0.3] - 2026-10-13
 
 ### Changed
 
+- **Stripped OpenCode Client Headers** - Stopped forwarding OpenCode's own headers (`x-opencode-*`, `x-stainless-*`, session IDs, and `b3`/`traceparent` trace headers) to Google, matching authentic Antigravity IDE behavior.
 - **Gemini Model Lineup** - Updated active Gemini models on Antigravity to Gemini 3.8 Flash, Gemini 3 Flash, Gemini 3.1 Flash-Lite, and Gemini 3.5 Flash-Lite.
 - **Retired Models Fallback** - Transparently routed requests for retired Gemini Pro and intermediate Flash models to Gemini 3.8 Flash.
 - **Flash-Lite Routing** - Routed Gemini 3.5 Flash-Lite through Antigravity quota by default with Gemini CLI fallback.
