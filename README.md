@@ -171,7 +171,6 @@ The official Antigravity SDK uses `GEMINI_API_KEY` for local Gemini access. This
 
 > **Routing Behavior:**
 > - **OAuth Antigravity-first (default):** Gemini models use Antigravity quota across OAuth accounts.
->   Gemini 3.5 Flash-Lite is public-only and uses the Gemini CLI/public path directly.
 > - **Antigravity SDK / Gemini API:** API-key auth, `GEMINI_API_KEY`, or configured `agy_sdk.cloud_projects` route Gemini requests through the public Gemini API.
 > - **Legacy CLI-first (`cli_first: true`):** Gemini models use the legacy Gemini CLI quota first.
 > - When OAuth quota pools are exhausted, configured `agy_sdk.cloud_projects` are used as backup capacity before failing if `agy_sdk.enabled: true`, `agy_sdk.api_key_fallback: true`, and usable API-key credentials are present.

@@ -34,7 +34,6 @@ import {
   transformAntigravityResponse,
 } from "./plugin/request";
 import {
-  isGeminiPublicOnlyModel,
   resolveModelWithTier,
 } from "./plugin/transform/model-resolver";
 import {
@@ -4369,8 +4368,7 @@ function resolveHeaderRoutingDecision(
     explicitQuota,
     allowQuotaFallback:
       family === "gemini" &&
-      resolvedModel?.isImageModel !== true &&
-      !isGeminiPublicOnlyModel(modelWithSuffix ?? ""),
+      resolvedModel?.isImageModel !== true,
   };
 }
 

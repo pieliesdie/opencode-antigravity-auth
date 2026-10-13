@@ -100,8 +100,7 @@ const GEMINI_38_FLASH_MODELS = {
   medium: "gemini-3.8-flash-medium",
   high: "gemini-3.8-flash-high",
 } as const;
-const GEMINI_PUBLIC_ONLY_REGEX =
-  /^(?:gemini-3\.5-flash-lite(?:-(?:minimal|low|medium|high))?|gemini-flash-lite-latest)$/i;
+
 /**
  * Dotted-minor Gemini generations (gemini-3.1, gemini-3.5, ...) use BARE model
  * names on the Gemini CLI backend, unlike the legacy 3.0 line (gemini-3-pro) which
@@ -281,17 +280,12 @@ export function getDefaultGemini3ThinkingLevel(model: string): string {
   return "low";
 }
 
-/** Models released on the public Gemini API without a verified Antigravity route. */
-export function isGeminiPublicOnlyModel(model: string): boolean {
-  return GEMINI_PUBLIC_ONLY_REGEX.test(model.replace(QUOTA_PREFIX_REGEX, ""));
-}
-
 /**
  * Resolves a model name with optional tier suffix and quota prefix to its actual API model name
  * and corresponding thinking configuration.
  *
  * Quota routing:
- * - Default to Antigravity quota unless cli_first is enabled or a model is public-only
+ * - Default to Antigravity quota unless cli_first is enabled
  * - Fallback to Gemini CLI happens at account rotation level when Antigravity is exhausted
  * - "antigravity-" prefix marks explicit quota (no fallback allowed)
  * - Claude and image models always use Antigravity
@@ -321,12 +315,11 @@ export function resolveModelWithTier(
   const isImageModel = IMAGE_GENERATION_MODELS.test(modelWithoutQuota);
   const isClaudeModel = modelWithoutQuota.toLowerCase().includes("claude");
 
-  // Models default to Antigravity unless they are public-only or cli_first is enabled.
+  // Models default to Antigravity unless cli_first is enabled.
   // Fallback to gemini-cli happens at the account rotation level when Antigravity is exhausted
   const preferGeminiCli =
     !isAntigravity &&
-    (isGeminiPublicOnlyModel(modelWithoutQuota) ||
-      (options.cli_first === true && !isImageModel && !isClaudeModel));
+    options.cli_first === true && !isImageModel && !isClaudeModel;
   const quotaPreference = preferGeminiCli
     ? ("gemini-cli" as const)
     : ("antigravity" as const);

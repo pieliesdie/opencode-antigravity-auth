@@ -56,16 +56,16 @@ describe("Gemini Flash-Lite routing", () => {
   const url =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:streamGenerateContent";
 
-  it("uses the public Gemini quota path without Antigravity fallback", () => {
+  it("uses the Antigravity quota path with Gemini CLI fallback, like other Gemini models", () => {
     expect(__testExports.getHeaderStyleFromUrl(url, "gemini")).toBe(
-      "gemini-cli",
+      "antigravity",
     );
     expect(
       __testExports.resolveHeaderRoutingDecision(url, "gemini", DEFAULT_CONFIG),
     ).toMatchObject({
-      preferredHeaderStyle: "gemini-cli",
+      preferredHeaderStyle: "antigravity",
       explicitQuota: false,
-      allowQuotaFallback: false,
+      allowQuotaFallback: true,
     });
   });
 });

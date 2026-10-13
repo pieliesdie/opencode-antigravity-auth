@@ -29,7 +29,6 @@ export {
   resolveAntigravityGemini38FlashBackendModel,
   isGemini3ProModel,
   getDefaultGemini3ThinkingLevel,
-  isGeminiPublicOnlyModel,
   getModelFamily,
   MODEL_ALIASES,
   THINKING_TIER_BUDGETS,
