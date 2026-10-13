@@ -39,7 +39,7 @@ Enable Opencode to authenticate against **Antigravity** (Google's IDE) via OAuth
 
 ### OpenCode v2
 
-This branch supports OpenCode **2.0.22** through the v2 plugin API. It registers Google OAuth, Gemini API keys, models, thinking variants, and `google_search`, while sharing the existing request transformation and multi-account quota routing.
+This branch supports OpenCode **2.0.27** through the v2 plugin API. It registers Google OAuth, Gemini API keys, models, thinking variants, and `google_search`, while sharing the existing request transformation and multi-account quota routing.
 
 For a local checkout, build it with `npm ci && npm run build`, then add its **directory** to your OpenCode configuration:
 
@@ -51,7 +51,7 @@ For a local checkout, build it with `npm ci && npm run build`, then add its **di
 
 Run `opencode auth login` or `/connect`, choose Google, then **OAuth with Google (Antigravity)**. Repeat the connection flow to add another Google account. Select **Paste the redirect URL manually** for a remote or headless setup. Existing `antigravity.json` settings and account storage continue to work.
 
-V2 registers model definitions automatically; existing v1 provider/model configuration is also normalized by OpenCode. Notifications use the server log output because v2 has no server-side TUI toast API. Interrupted tool calls are repaired in the v2 request context; v1 session files are not modified.
+V2 registers model definitions automatically; existing v1 provider/model configuration is also normalized by OpenCode. Notifications use the server log output because v2 has no server-side TUI toast API. With `session_recovery` enabled, interrupted tool calls are repaired in the v2 request context; v1 session files are not modified. The v1-only `auto_resume` and `resume_text` settings do not apply to this context repair.
 
 #### Manage accounts in the V2 terminal UI
 

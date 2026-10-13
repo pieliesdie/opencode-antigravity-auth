@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.2] - 2026-10-13
+
+### Changed
+
+- **Upstream synchronization** - Merged upstream changes supporting OpenCode 2.0.27 credential lifecycle with `@opencode/plugin` 2.0.27.
+
 ## [2.0.1] - 2026-10-13
 
 ### Added
