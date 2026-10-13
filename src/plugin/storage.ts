@@ -220,6 +220,8 @@ export interface AccountMetadataV3 {
   /** Cached soft quota data */
   cachedQuota?: Record<string, { remainingFraction?: number; resetTime?: string; modelCount: number }>;
   cachedQuotaUpdatedAt?: number;
+  /** Revision for enabled/verification fields; protects menu changes from stale manager saves. */
+  controlUpdatedAt?: number;
 }
 
 export interface AccountStorageV3 {
@@ -653,9 +655,17 @@ function mergeAccountStorage(
     if (acc.refreshToken && !deletedRefreshTokenHashes.has(hashRefreshToken(acc.refreshToken))) {
       const existingAcc = accountMap.get(acc.refreshToken);
       if (existingAcc) {
+        const control = (acc.controlUpdatedAt ?? 0) > (existingAcc.controlUpdatedAt ?? 0) ||
+          (!acc.controlUpdatedAt && !existingAcc.controlUpdatedAt) ? acc : existingAcc;
         accountMap.set(acc.refreshToken, {
           ...existingAcc,
           ...acc,
+          enabled: control.enabled,
+          verificationRequired: control.verificationRequired,
+          verificationRequiredAt: control.verificationRequiredAt,
+          verificationRequiredReason: control.verificationRequiredReason,
+          verificationUrl: control.verificationUrl,
+          controlUpdatedAt: control.controlUpdatedAt,
           // Preserve manually configured projectId/managedProjectId if not in incoming
           projectId: acc.projectId ?? existingAcc.projectId,
           managedProjectId: acc.managedProjectId ?? existingAcc.managedProjectId,
@@ -1049,15 +1059,15 @@ export async function saveAccountsReplace(storage: AccountStorageV4): Promise<vo
   });
 }
 
-export async function removeAccountFromStorage(refreshToken: string): Promise<void> {
+export async function removeAccountFromStorage(refreshToken: string): Promise<boolean> {
   const path = getStoragePath();
   const configDir = dirname(path);
   await fs.mkdir(configDir, { recursive: true });
   await ensureGitignore(configDir);
 
-  await withFileLock(path, async () => {
+  return withFileLock(path, async () => {
     const existing = await loadAccountsUnsafe();
-    if (!existing) return;
+    if (!existing?.accounts.some((account) => account.refreshToken === refreshToken)) return false;
     const accounts = existing.accounts.filter((account) => account.refreshToken !== refreshToken);
     const deletedRefreshTokenHashes = new Set(existing.deletedRefreshTokenHashes ?? []);
     deletedRefreshTokenHashes.add(hashRefreshToken(refreshToken));
@@ -1073,6 +1083,66 @@ export async function removeAccountFromStorage(refreshToken: string): Promise<vo
         accounts,
       ),
     });
+    return true;
+  });
+}
+
+/** Atomically rotate a selected account's token, retiring the old token even against stale writers. */
+export async function replaceAccountInStorage(
+  oldToken: string,
+  replacement: Pick<AccountMetadataV3, "refreshToken" | "email" | "projectId" | "managedProjectId">,
+): Promise<void> {
+  const path = getStoragePath();
+  const configDir = dirname(path);
+  await fs.mkdir(configDir, { recursive: true });
+  await ensureGitignore(configDir);
+  await withFileLock(path, async () => {
+    const storage = await loadAccountsUnsafe();
+    const index = storage?.accounts.findIndex((account) => account.refreshToken === oldToken) ?? -1;
+    if (!storage || index < 0) throw new Error("The selected account changed. Reopen the account menu.");
+    const previous = storage.accounts[index]!;
+    if (!previous.email || !replacement.email || previous.email.toLowerCase() !== replacement.email.toLowerCase()) {
+      throw new Error("Signed-in identity does not match the selected account; nothing was changed.");
+    }
+    if (!replacement.refreshToken ||
+      (replacement.refreshToken !== oldToken && storage.accounts.some((account) => account.refreshToken === replacement.refreshToken)) ||
+      (storage.deletedRefreshTokenHashes ?? []).includes(hashRefreshToken(replacement.refreshToken))) {
+      throw new Error("The new account token is unavailable; nothing was changed.");
+    }
+    const accounts = [...storage.accounts];
+    accounts[index] = {
+      ...previous,
+      ...replacement,
+      projectId: replacement.projectId ?? previous.projectId,
+      managedProjectId: replacement.managedProjectId ?? previous.managedProjectId,
+      lastUsed: Date.now(),
+    };
+    const deletedRefreshTokenHashes = new Set(storage.deletedRefreshTokenHashes ?? []);
+    if (oldToken !== replacement.refreshToken) deletedRefreshTokenHashes.add(hashRefreshToken(oldToken));
+    await writeAccountsAtomically(path, {
+      ...storage,
+      accounts,
+      deletedRefreshTokenHashes: deletedRefreshTokenHashes.size ? [...deletedRefreshTokenHashes] : undefined,
+    });
+  });
+}
+
+/** Change one existing account under the file lock, without merging a stale pool snapshot. */
+export async function updateAccountInStorage(
+  refreshToken: string,
+  update: (account: AccountMetadataV3) => void,
+): Promise<boolean> {
+  const path = getStoragePath();
+  await fs.mkdir(dirname(path), { recursive: true });
+  await ensureGitignore(dirname(path));
+  return withFileLock(path, async () => {
+    const storage = await loadAccountsUnsafe();
+    const account = storage?.accounts.find((item) => item.refreshToken === refreshToken);
+    if (!storage || !account) return false;
+    update(account);
+    account.controlUpdatedAt = Math.max(Date.now(), (account.controlUpdatedAt ?? 0) + 1);
+    await writeAccountsAtomically(path, storage);
+    return true;
   });
 }
 

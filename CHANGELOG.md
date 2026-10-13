@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.1] - 2026-10-13
+
+### Added
+
+- **V2 account management** - Added `/antigravity-accounts` TUI and standalone `antigravity-accounts` CLI with a live all-account quota and verification view.
+
+### Changed
+
+- **Account persistence and TUI loading** - Added safer account storage/reconciliation and a local root shim for loading the TUI.
+
 ## [1.7.2] - 2026-09-21
 
 ### Changed

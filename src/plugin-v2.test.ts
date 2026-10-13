@@ -21,6 +21,7 @@ vi.mock("./plugin/config/index.ts", () => ({
   loadConfig: core.loadConfig,
 }))
 
+
 const { AntigravityV2Plugin } = await import("./plugin-v2.ts")
 
 type OAuthResult = {
@@ -28,6 +29,7 @@ type OAuthResult = {
   refresh: string
   access: string
   expires: number
+  email?: string
 }
 
 type LegacyLoader = {
@@ -97,6 +99,7 @@ interface TestContext {
   location: { directory: string }
   integration: {
     transform: (callback: (editor: IntegrationEditor) => void) => Promise<{ dispose: () => Promise<void> }>
+    reload: () => Promise<void>
     connection: {
       active: () => Promise<unknown>
       resolve: () => Promise<unknown>
@@ -249,6 +252,7 @@ function createContext(options: {
     location: { directory: "/v2-test" },
     integration: {
       transform: async (callback) => { callback(integrationEditor); return registration() },
+      reload: vi.fn(async () => undefined),
       connection: {
         active: async () => options.credential ? { type: "credential", id: "credential-1" } : undefined,
         resolve: async () => options.credential,
@@ -331,6 +335,8 @@ describe("AntigravityV2Plugin", () => {
     await setup(context)
 
     const oauth = oauthRegistration(hooks.integration)
+    expect(oauth.method.form).toMatchObject([{ key: "noBrowser", type: "boolean", default: false }])
+    expect(oauth.method.form).toHaveLength(1)
     const authorization = await oauth.authorize({ noBrowser: true })
     expect(authorization.mode).toBe("code")
     if (authorization.mode !== "code") throw new Error("Expected code OAuth flow")
@@ -341,6 +347,8 @@ describe("AntigravityV2Plugin", () => {
       access: "access-code",
       expires: 123,
     })
+    expect(hooks.integration.filter((method) => method.method.type === "oauth")).toHaveLength(1)
+    expect(context.integration.reload).not.toHaveBeenCalled()
     expect(legacy.auth.methods[0]?.authorize).toHaveBeenCalledWith({ noBrowser: "true" })
     expect(hooks.integration.some((method) => method.method.type === "key")).toBe(true)
     expect(providerModels.map((model) => String(model.id))).toContain("custom-model")
@@ -368,7 +376,7 @@ describe("AntigravityV2Plugin", () => {
     await setup(context)
 
     const oauth = oauthRegistration(hooks.integration)
-    const authorization = await oauth.authorize({})
+    const authorization = await oauth.authorize({ noBrowser: false })
     expect(authorization.mode).toBe("auto")
     if (authorization.mode !== "auto") throw new Error("Expected automatic OAuth flow")
     await expect(authorization.callback).resolves.toMatchObject({

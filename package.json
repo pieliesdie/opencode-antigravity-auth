@@ -1,9 +1,12 @@
 {
     "name": "@pieliesdie/opencode-antigravity-auth",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "description": "Google Antigravity IDE OAuth auth plugin for Opencode - access Gemini 3 Pro and Claude 4.6 using Google credentials",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
+    "bin": {
+        "antigravity-accounts": "./dist/accounts.js"
+    },
     "type": "module",
     "exports": {
         ".": {
@@ -17,6 +20,9 @@
         "./server": {
             "types": "./dist/server.d.ts",
             "import": "./dist/server.js"
+        },
+        "./tui": {
+            "import": "./dist/tui.js"
         }
     },
     "license": "MIT",
@@ -48,7 +54,8 @@
         "LICENSE"
     ],
     "scripts": {
-        "build": "esbuild index=index.ts v1=v1.ts server=server.ts google-provider=src/google-provider.ts --bundle --format=esm --platform=node --outdir=dist --external:node: --external:proper-lockfile --external:xdg-basedir --external:zod --external:@openauthjs/openauth --sourcemap",
+        "build": "esbuild index=index.ts v1=v1.ts server=server.ts tui=src/tui.ts accounts=src/accounts-cli.ts google-provider=src/google-provider.ts --bundle --format=esm --platform=node --outdir=dist --external:node: --external:proper-lockfile --external:xdg-basedir --external:zod --external:@openauthjs/openauth --external:@opencode/plugin --sourcemap",
+        "accounts": "npm run build && node dist/accounts.js",
         "build:schema": "npx tsx script/build-schema.ts",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
@@ -78,6 +85,7 @@
         "@opencode-ai/plugin": "^0.15.31",
         "@opencode/plugin": "2.0.22",
         "proper-lockfile": "^4.1.2",
+        "solid-js": "^1.9.17",
         "xdg-basedir": "^5.1.0",
         "zod": "^4.4.3"
     },

@@ -19,10 +19,13 @@ importers:
         version: 0.15.31
       '@opencode/plugin':
         specifier: 2.0.22
-        version: 2.0.22(@opentelemetry/semantic-conventions@1.43.0)(redis@6.3.0(@opentelemetry/api@1.9.0))(supports-color@7.2.0)
+        version: 2.0.22(@opentelemetry/semantic-conventions@1.43.0)(redis@6.3.0(@opentelemetry/api@1.9.0))(solid-js@1.9.17)(supports-color@7.2.0)
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
+      solid-js:
+        specifier: ^1.9.17
+        version: 1.9.17
       xdg-basedir:
         specifier: ^5.1.0
         version: 5.1.0
@@ -42,6 +45,9 @@ importers:
       '@vitest/ui':
         specifier: ^3.2.7
         version: 3.2.7(vitest@3.2.7)
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1118,6 +1124,9 @@ packages:
     engines: {node: '>=4'}
     hasBin: true
 
+  csstype@3.2.3:
+    resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+
   data-uri-to-buffer@4.0.1:
     resolution: {integrity: sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==}
     engines: {node: '>= 12'}
@@ -1667,6 +1676,16 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
+  seroval-plugins@1.6.8:
+    resolution: {integrity: sha512-N7mWAMydj89EnYTHtRpS3LBrAz3J9O6oVrqpuXuvlAHfAUG8WEKqtbAd7SBiJNY5NfCAFhSdyAh7wI4Shjqy4g==}
+    engines: {node: '>=10'}
+    peerDependencies:
+      seroval: ^1.0
+
+  seroval@1.6.8:
+    resolution: {integrity: sha512-HlSgSAkTk4EqHcje1ptJjfZi1YDv5KbhVJ/d3P7T/nAXua2VmDu+AKDX5VTdFfZf48nDkWB2TKYt0DrCSa+3wg==}
+    engines: {node: '>=10'}
+
   shebang-command@2.0.0:
     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}
     engines: {node: '>=8'}
@@ -1704,6 +1723,9 @@ packages:
   socks@2.8.10:
     resolution: {integrity: sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==}
     engines: {node: '>= 10.0.0', npm: '>= 3.0.0'}
+
+  solid-js@1.9.17:
+    resolution: {integrity: sha512-4GAmLOWPfNV8H9Jfn2LSFTpNEG6jiOKPiwd5lnLGQtehHaX6l3TOLzJqQ7mqwB/3k1Yy3zyumFVopmc/tm34ow==}
 
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
@@ -2532,24 +2554,27 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@opencode/client@2.0.22(effect@4.0.0-rc.112)':
+  '@opencode/client@2.0.22(effect@4.0.0-rc.112)(solid-js@1.9.17)':
     dependencies:
       '@opencode/protocol': 2.0.22
       '@opencode/schema': 2.0.22
     optionalDependencies:
       effect: 4.0.0-rc.112
+      solid-js: 1.9.17
 
-  '@opencode/plugin@2.0.22(@opentelemetry/semantic-conventions@1.43.0)(redis@6.3.0(@opentelemetry/api@1.9.0))(supports-color@7.2.0)':
+  '@opencode/plugin@2.0.22(@opentelemetry/semantic-conventions@1.43.0)(redis@6.3.0(@opentelemetry/api@1.9.0))(solid-js@1.9.17)(supports-color@7.2.0)':
     dependencies:
       '@ai-sdk/provider': 3.0.8
       '@opencode/ai': 2.0.22(supports-color@7.2.0)
-      '@opencode/client': 2.0.22(effect@4.0.0-rc.112)
+      '@opencode/client': 2.0.22(effect@4.0.0-rc.112)(solid-js@1.9.17)
       '@opencode/protocol': 2.0.22
       '@opencode/schema': 2.0.22
       '@opencode/util': 2.0.22(@opentelemetry/semantic-conventions@1.43.0)(redis@6.3.0(@opentelemetry/api@1.9.0))(supports-color@7.2.0)
       '@standard-schema/spec': 1.1.0
       effect: 4.0.0-rc.112
       zod: 4.1.8
+    optionalDependencies:
+      solid-js: 1.9.17
     transitivePeerDependencies:
       - '@opentelemetry/sdk-trace-web'
       - '@opentelemetry/semantic-conventions'
@@ -3112,6 +3137,8 @@ snapshots:
       which: 2.0.2
 
   cssesc@3.0.0: {}
+
+  csstype@3.2.3: {}
 
   data-uri-to-buffer@4.0.1: {}
 
@@ -3744,6 +3771,12 @@ snapshots:
 
   semver@7.8.5: {}
 
+  seroval-plugins@1.6.8(seroval@1.6.8):
+    dependencies:
+      seroval: 1.6.8
+
+  seroval@1.6.8: {}
+
   shebang-command@2.0.0:
     dependencies:
       shebang-regex: 3.0.0
@@ -3787,6 +3820,12 @@ snapshots:
     dependencies:
       ip-address: 10.7.2
       smart-buffer: 4.2.0
+
+  solid-js@1.9.17:
+    dependencies:
+      csstype: 3.2.3
+      seroval: 1.6.8
+      seroval-plugins: 1.6.8(seroval@1.6.8)
 
   source-map-js@1.2.1: {}
 

@@ -4,6 +4,8 @@ import {
   migrateV2ToV3,
   loadAccounts,
   removeAccountFromStorage,
+  replaceAccountInStorage,
+  updateAccountInStorage,
   saveAccounts,
   type AccountMetadata,
   type AccountStorage,
@@ -213,6 +215,28 @@ describe("deduplicateAccountsByEmail", () => {
 });
 
 describe("removeAccountFromStorage", () => {
+  beforeEach(() => { vi.mocked(fs.writeFile).mockClear(); });
+  it("keeps a newer locked control update when a stale pool saves later", async () => {
+    const initial: AccountStorageV4 = {
+      version: 4,
+      accounts: [{ refreshToken: "selected", enabled: true, addedAt: 1, lastUsed: 1 }],
+      activeIndex: 0,
+    };
+    let diskContent = JSON.stringify(initial);
+    vi.mocked(fs.readFile).mockImplementation(async (path) =>
+      String(path).endsWith(".gitignore") ? "" : diskContent);
+    vi.mocked(fs.writeFile).mockImplementation(async (path, data) => {
+      if (String(path).includes(".tmp")) diskContent = String(data);
+    });
+
+    expect(await updateAccountInStorage("selected", (account) => { account.enabled = false; })).toBe(true);
+    await saveAccounts(initial);
+
+    const saved = JSON.parse(diskContent) as AccountStorageV4;
+    expect(saved.accounts[0]?.enabled).toBe(false);
+    expect(saved.accounts[0]?.controlUpdatedAt).toBeGreaterThan(0);
+  });
+
   it("removes only the revoked identity while preserving concurrently added accounts", async () => {
     const stored = {
       version: 4,
@@ -275,6 +299,46 @@ describe("removeAccountFromStorage", () => {
     expect(saved.activeIndex).toBe(0);
     expect(saved.activeIndexByFamily).toEqual({ claude: 0, gemini: 0 });
     expect(diskContent).not.toContain("revoked");
+  });
+});
+
+describe("replaceAccountInStorage", () => {
+  beforeEach(() => { vi.mocked(fs.writeFile).mockClear(); });
+
+  it("atomically replaces a used same-email token and tombstones it against stale saves", async () => {
+    const initial: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "old", email: "same@example.com", addedAt: 1, lastUsed: 50_000 },
+        { refreshToken: "other", email: "other@example.com", addedAt: 2, lastUsed: 10 },
+      ],
+      activeIndex: 0,
+      activeIndexByFamily: { claude: 0, gemini: 1 },
+    };
+    let diskContent = JSON.stringify(initial);
+    vi.mocked(fs.readFile).mockImplementation(async (path) => String(path).endsWith(".gitignore") ? "" : diskContent);
+    vi.mocked(fs.writeFile).mockImplementation(async (path, data) => {
+      if (String(path).includes(".tmp")) diskContent = String(data);
+    });
+
+    await replaceAccountInStorage("old", { refreshToken: "new", email: "same@example.com", projectId: "project" });
+    await saveAccounts(initial);
+
+    const saved = JSON.parse(diskContent) as AccountStorageV4;
+    expect(saved.accounts.map((account) => account.refreshToken)).toEqual(["new", "other"]);
+    expect(saved.accounts[0]).toMatchObject({ email: "same@example.com", projectId: "project" });
+    expect(saved.activeIndexByFamily).toEqual({ claude: 0, gemini: 1 });
+    expect(diskContent).not.toContain("old");
+    expect(saved.deletedRefreshTokenHashes).toHaveLength(1);
+  });
+
+  it("rejects a different Google identity without writing any account changes", async () => {
+    const initial: AccountStorageV4 = {
+      version: 4, accounts: [{ refreshToken: "old", email: "a@example.com", addedAt: 1, lastUsed: 1 }], activeIndex: 0,
+    };
+    vi.mocked(fs.readFile).mockImplementation(async (path) => String(path).endsWith(".gitignore") ? "" : JSON.stringify(initial));
+    await expect(replaceAccountInStorage("old", { refreshToken: "new", email: "b@example.com" })).rejects.toThrow("identity does not match");
+    expect(vi.mocked(fs.writeFile).mock.calls.filter(([path]) => String(path).includes(".tmp"))).toHaveLength(0);
   });
 });
 

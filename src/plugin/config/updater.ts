@@ -69,8 +69,7 @@ export function getOpencodeConfigDir(): string {
  * Prefers opencode.jsonc when present so we update the active config file
  * instead of creating a new opencode.json.
  */
-export function getOpencodeConfigPath(): string {
-  const configDir = getOpencodeConfigDir();
+export function getOpencodeConfigPath(configDir = getOpencodeConfigDir()): string {
   const jsoncPath = join(configDir, OPENCODE_JSONC_FILENAME);
   const jsonPath = join(configDir, OPENCODE_JSON_FILENAME);
 
@@ -173,5 +172,26 @@ export async function updateOpencodeConfig(
       configPath,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+/** V2 registers plugin models at runtime. This optional static export changes only models,
+ * never inserts a V1 `plugin` entry or rewrites the V2 `plugins` selection. */
+export async function updateV2ModelsConfig(
+  options: UpdateConfigOptions = {}
+): Promise<UpdateConfigResult> {
+  const configPath = options.configPath ?? getOpencodeConfigPath(process.env.OPENCODE_CONFIG_DIR || getOpencodeConfigDir());
+  try {
+    const config: OpencodeConfig = existsSync(configPath)
+      ? JSON.parse(stripJsonCommentsAndTrailingCommas(readFileSync(configPath, "utf-8"))) as OpencodeConfig
+      : { $schema: SCHEMA_URL };
+    config.provider ??= {};
+    config.provider.google ??= {};
+    config.provider.google.models = { ...OPENCODE_MODEL_DEFINITIONS };
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+    return { success: true, configPath };
+  } catch (error) {
+    return { success: false, configPath, error: error instanceof Error ? error.message : String(error) };
   }
 }

@@ -748,7 +748,7 @@ function isModelPermissionDeniedOnProjectError(bodyText: string): boolean {
   return decoded.includes("permission denied on resource project");
 }
 
-async function verifyAccountAccess(
+export async function verifyAccountAccess(
   account: {
     refreshToken: string;
     email?: string;
@@ -2004,7 +2004,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
       }
       activeAccountManager = accountManager;
       if (accountManager.getAccountCount() > 0) {
-        accountManager.requestSaveToDisk();
+        // A V2 OAuth credential can seed a new pool before the first disk save.
+        // Persist it before the fetch-time eligibility check treats missing
+        // storage as unavailable (while preserving the V1 debounce path).
+        if (runtime === "v2" && !storedAccounts) await accountManager.saveToDisk();
+        else accountManager.requestSaveToDisk();
       }
 
       // Initialize proactive token refresh queue (ported from LLM-API-Key-Proxy)
@@ -2047,6 +2051,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
           if (!isGenerativeLanguageRequest(input)) {
             return fetch(input, init);
           }
+
+          // The V2 TUI is a separate bundle/process: module-local sync notifications
+          // cannot reach this manager. Read the authoritative account controls before
+          // routing each new request; never send with a removed or disabled account.
+          if (runtime === "v2") accountManager.reconcileEligibility(await loadAccounts());
 
           // Fall back to the API-key-only sub-branch only when we have no
           // usable OAuth accounts (e.g. all were removed via invalid_grant).
@@ -2169,6 +2178,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           while (true) {
             // Check for abort at the start of each iteration
             checkAborted();
+            if (runtime === "v2") accountManager.reconcileEligibility(await loadAccounts());
             
             const accountCount = accountManager.getAccountCount();
             // Safety net: a request can iterate at most a few times per account
@@ -3602,7 +3612,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   if (menuResult.toggleAccountIndex !== undefined) {
                     const acc = existingStorage.accounts[menuResult.toggleAccountIndex];
                     if (acc) {
-                      acc.enabled = acc.enabled === false;
+                       acc.enabled = acc.enabled === false;
+                       acc.controlUpdatedAt = Math.max(Date.now(), (acc.controlUpdatedAt ?? 0) + 1);
                       await saveAccounts(existingStorage);
                       activeAccountManager?.setAccountEnabled(menuResult.toggleAccountIndex, acc.enabled);
                       console.log(`\nAccount ${acc.email || menuResult.toggleAccountIndex + 1} ${acc.enabled ? 'enabled' : 'disabled'}.\n`);
@@ -3642,6 +3653,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       if (verification.status === "ok") {
                         const { changed, wasVerificationRequired } = clearStoredAccountVerificationRequired(account, true);
                         if (changed) {
+                          account.controlUpdatedAt = Math.max(Date.now(), (account.controlUpdatedAt ?? 0) + 1);
                           storageUpdated = true;
                         }
                         activeAccountManager?.clearAccountVerificationRequired(i, wasVerificationRequired);
@@ -3657,6 +3669,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                           verification.verifyUrl,
                         );
                         if (changed) {
+                          account.controlUpdatedAt = Math.max(Date.now(), (account.controlUpdatedAt ?? 0) + 1);
                           storageUpdated = true;
                         }
                         activeAccountManager?.markAccountVerificationRequired(i, verification.message, verification.verifyUrl);
@@ -3728,6 +3741,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   if (verification.status === "ok") {
                     const { changed, wasVerificationRequired } = clearStoredAccountVerificationRequired(account, true);
                     if (changed) {
+                      account.controlUpdatedAt = Math.max(Date.now(), (account.controlUpdatedAt ?? 0) + 1);
                       await saveAccounts(existingStorage);
                     }
                     activeAccountManager?.clearAccountVerificationRequired(verifyAccountIndex, wasVerificationRequired);
@@ -3748,6 +3762,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       verification.verifyUrl,
                     );
                     if (changed) {
+                      account.controlUpdatedAt = Math.max(Date.now(), (account.controlUpdatedAt ?? 0) + 1);
                       await saveAccounts(existingStorage);
                     }
                     activeAccountManager?.markAccountVerificationRequired(
@@ -4152,6 +4167,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   if (!params) {
                     return { type: "failed", error: "Missing code or state in callback URL" };
                   }
+                  if (params.state !== fallbackState) {
+                    return { type: "failed", error: "Invalid OAuth callback state" };
+                  }
 
                   const result = await exchangeAntigravity(params.code, params.state);
                   if (result.type === "success") {
@@ -4203,6 +4221,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
               const params = parseOAuthCallbackInput(codeInput, fallbackState);
               if ("error" in params) {
                 return { type: "failed", error: params.error };
+              }
+              if (params.state !== fallbackState) {
+                return { type: "failed", error: "Invalid OAuth callback state" };
               }
 
               const result = await exchangeAntigravity(params.code, params.state);

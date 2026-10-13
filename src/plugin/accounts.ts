@@ -180,6 +180,7 @@ export interface ManagedAccount {
   /** Cached quota data from last checkAccountsQuota() call */
   cachedQuota?: Partial<Record<QuotaGroup, QuotaGroupSummary>>;
   cachedQuotaUpdatedAt?: number;
+  controlUpdatedAt?: number;
   verificationRequired?: boolean;
   verificationRequiredAt?: number;
   verificationRequiredReason?: string;
@@ -445,6 +446,7 @@ export class AccountManager {
   /** Tracks an in-flight disk write so flushSaveToDisk can await a write that has
    * already started (savePending is cleared before the write settles). */
   private activeSave: Promise<void> | null = null;
+  private eligibilityUnavailable = false;
 
   static async loadFromDisk(authFallback?: OAuthAuthDetails): Promise<AccountManager> {
     const stored = await loadAccounts();
@@ -501,6 +503,7 @@ export class AccountManager {
             fingerprintHistory: acc.fingerprintHistory ?? [],
             cachedQuota: acc.cachedQuota as Partial<Record<QuotaGroup, QuotaGroupSummary>> | undefined,
             cachedQuotaUpdatedAt: acc.cachedQuotaUpdatedAt,
+            controlUpdatedAt: acc.controlUpdatedAt,
             verificationRequired: acc.verificationRequired,
             verificationRequiredAt: acc.verificationRequiredAt,
             verificationRequiredReason: acc.verificationRequiredReason,
@@ -581,7 +584,7 @@ export class AccountManager {
   }
 
   getEnabledAccounts(): ManagedAccount[] {
-    return this.accounts.filter((account) => account.enabled !== false);
+    return this.eligibilityUnavailable ? [] : this.accounts.filter((account) => account.enabled !== false);
   }
 
   getAccountsSnapshot(): ManagedAccount[] {
@@ -604,6 +607,7 @@ export class AccountManager {
    * header style.
    */
   setPreferredAccount(refreshToken: string): boolean {
+    if (this.eligibilityUnavailable) return false;
     const account = this.accounts.find((candidate) =>
       candidate.parts.refreshToken === refreshToken &&
       candidate.enabled !== false
@@ -622,6 +626,7 @@ export class AccountManager {
   }
 
   getCurrentAccountForFamily(family: ModelFamily): ManagedAccount | null {
+    if (this.eligibilityUnavailable) return null;
     const currentIndex = this.currentAccountIndexByFamily[family];
     if (currentIndex >= 0 && currentIndex < this.accounts.length) {
       const account = this.accounts[currentIndex] ?? null;
@@ -660,6 +665,7 @@ export class AccountManager {
     softQuotaCacheTtlMs: number = 10 * 60 * 1000,
     excludeIndices?: Set<number>,
   ): ManagedAccount | null {
+    if (this.eligibilityUnavailable) return null;
     const quotaKey = getQuotaKey(family, headerStyle, model);
 
     if (strategy === 'round-robin') {
@@ -742,6 +748,7 @@ export class AccountManager {
   }
 
   getNextForFamily(family: ModelFamily, model?: string | null, headerStyle: HeaderStyle = "antigravity", softQuotaThresholdPercent: number = 100, softQuotaCacheTtlMs: number = 10 * 60 * 1000, excludeIndices?: Set<number>): ManagedAccount | null {
+    if (this.eligibilityUnavailable) return null;
     const available = this.accounts.filter((a) => {
       clearExpiredRateLimits(a);
       return a.enabled !== false &&
@@ -978,6 +985,7 @@ export class AccountManager {
       return false;
     }
     account.enabled = enabled;
+    account.controlUpdatedAt = Math.max(nowMs(), (account.controlUpdatedAt ?? 0) + 1);
 
     if (!enabled) {
       for (const family of Object.keys(this.currentAccountIndexByFamily) as ModelFamily[]) {
@@ -999,6 +1007,7 @@ export class AccountManager {
     }
 
     account.verificationRequired = true;
+    account.controlUpdatedAt = Math.max(nowMs(), (account.controlUpdatedAt ?? 0) + 1);
     account.verificationRequiredAt = nowMs();
     account.verificationRequiredReason = reason?.trim() || undefined;
 
@@ -1030,6 +1039,7 @@ export class AccountManager {
     );
 
     account.verificationRequired = false;
+    account.controlUpdatedAt = Math.max(nowMs(), (account.controlUpdatedAt ?? 0) + 1);
     account.verificationRequiredAt = undefined;
     account.verificationRequiredReason = undefined;
     account.verificationUrl = undefined;
@@ -1158,6 +1168,26 @@ export class AccountManager {
     return [...this.accounts];
   }
 
+  /** Reflect external account administration without persisting stale runtime state. */
+  reconcileEligibility(stored: AccountStorageV4 | null): void {
+    this.eligibilityUnavailable = stored === null;
+    // A failed read must block selection, not turn cached controls into a disk update.
+    if (!stored) return;
+    const current = new Map(stored.accounts.map((account) => [account.refreshToken, account]));
+    for (const account of this.accounts) {
+      const latest = current.get(account.parts.refreshToken);
+      // Do not undo a newer local verification block while its debounced save
+      // is still pending; the storage merge will persist that control revision.
+      if (latest && (account.controlUpdatedAt ?? 0) > (latest.controlUpdatedAt ?? 0)) continue;
+      account.enabled = latest !== undefined && latest.enabled !== false && latest.verificationRequired !== true;
+      account.controlUpdatedAt = latest?.controlUpdatedAt;
+      account.verificationRequired = latest?.verificationRequired;
+      account.verificationRequiredAt = latest?.verificationRequiredAt;
+      account.verificationRequiredReason = latest?.verificationRequiredReason;
+      account.verificationUrl = latest?.verificationUrl;
+    }
+  }
+
   async saveToDisk(replace = false): Promise<void> {
     const storage = this.createStorageSnapshot();
     return this.enqueueStorageOperation(() => replace
@@ -1259,6 +1289,7 @@ export class AccountManager {
         fingerprintHistory: a.fingerprintHistory?.length ? a.fingerprintHistory : undefined,
         cachedQuota: a.cachedQuota && Object.keys(a.cachedQuota).length > 0 ? a.cachedQuota : undefined,
         cachedQuotaUpdatedAt: a.cachedQuotaUpdatedAt,
+        controlUpdatedAt: a.controlUpdatedAt,
         verificationRequired: a.verificationRequired,
         verificationRequiredAt: a.verificationRequiredAt,
         verificationRequiredReason: a.verificationRequiredReason,

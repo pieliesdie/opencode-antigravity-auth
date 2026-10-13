@@ -45,13 +45,23 @@ For a local checkout, build it with `npm ci && npm run build`, then add its **di
 
 ```json
 {
-  "plugins": ["/absolute/path/to/opencode-antigravity-auth/dist"]
+  "plugins": ["/absolute/path/to/opencode-antigravity-auth"]
 }
 ```
 
 Run `opencode auth login` or `/connect`, choose Google, then **OAuth with Google (Antigravity)**. Repeat the connection flow to add another Google account. Select **Paste the redirect URL manually** for a remote or headless setup. Existing `antigravity.json` settings and account storage continue to work.
 
 V2 registers model definitions automatically; existing v1 provider/model configuration is also normalized by OpenCode. Notifications use the server log output because v2 has no server-side TUI toast API. Interrupted tool calls are repaired in the v2 request context; v1 session files are not modified.
+
+#### Manage accounts in the V2 terminal UI
+
+Run **`/antigravity-accounts`** in OpenCode, or choose **Manage Antigravity accounts** in the command palette. The native dialog menu lists saved accounts, displays live quotas, checks Google verification, enables/disables rotation, removes accounts with confirmation, and optionally replaces `provider.google.models` in the local configuration (V2 already registers models automatically). Choose one account or **All accounts** for batch actions; **Back** returns to the menu and **Escape** closes the current dialog. Verification sends a small test request and can update account status. Manual quota checks display live data but do not refresh the routing soft-quota cache.
+
+The CLI plugin loads automatically through the package's `./tui` export when the package is configured in `opencode.json`; no duplicate `cli.json` entry is needed. For a local checkout, configure the **package root** (`/absolute/path/to/opencode-antigravity-auth`), not just `dist`, so OpenCode can discover that export. Rebuild with `npm run build` after changes.
+
+Adding or refreshing an account shows instructions for a real sign-in: **`opencode auth login` → Google → OAuth with Google (Antigravity)**. The menu does not run OAuth or expose tokens. For explicit replacement of a saved account, follow the standalone `antigravity-accounts refresh <account number>` instructions shown in the menu.
+
+Account administration reads storage and updates model configuration on the **terminal's machine**. With a remote OpenCode server, use the standalone account command on that server; this menu does not administer remote account storage. Reopen the menu after an external sign-in or account change to refresh the list.
 
 The default package export also supports OpenCode v1 **1.18.29 and newer**. Older v1 hosts can load the built `dist/v1.js` entrypoint through a `file:///absolute/path/to/dist/v1.js` entry in their `plugin` array. The installation examples below use the v2 `plugins` array; use `plugin` on v1. The v2 implementation must be released before it is available through the published `@latest` tag.
 
@@ -85,7 +95,7 @@ Install the @pieliesdie/opencode-antigravity-auth plugin and add the Antigravity
    ```
 
 3. **Models** — current OpenCode versions can load plugin models dynamically at runtime. If your OpenCode version still requires static provider config, choose one:
-   - Run `opencode auth login` → Google → OAuth with Google (Antigravity) → select **"Configure models in opencode.json"** (auto-configures all models)
+   - Run `/antigravity-accounts` → **Configure models** to replace the local Google model definitions without changing the V2 `plugins` entry
    - Or manually copy the [full configuration](#models) below
 
 4. **Use it:**
@@ -368,9 +378,9 @@ Add multiple Google accounts for a higher combined quota. The plugin automatical
 opencode auth login  # Run again to add more accounts
 ```
 
-**Account management options (via `opencode auth login`):**
-- **Configure models** — Auto-configure all plugin models in opencode.json
-- **Check quotas** — View remaining API quota for each account
+**Account management options (via `/antigravity-accounts` in OpenCode V2, or the standalone `antigravity-accounts` command):**
+- **Configure models** — Optionally replace `provider.google.models` in the local config; V2 normally registers these automatically
+- **Check quotas** — Display remaining live API quota for each account (does not update the routing cache)
 - **Manage accounts** — Enable/disable specific accounts for rotation
 
 For details on load balancing, dual quota pools, and account storage, see [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md).
@@ -763,7 +773,7 @@ Set `prefer_for_gemini: true` if you want Gemini models to use the newer Gemini 
 | `quota_refresh_interval_minutes` | `15` | Background quota refresh interval. After successful API requests, refreshes quota cache if older than this interval. Set to `0` to disable. |
 | `soft_quota_cache_ttl_minutes` | `"auto"` | How long quota cache is considered fresh. `"auto"` = max(2 × refresh interval, 10 minutes). Set a number (1-120) for fixed TTL. |
 
-> **How it works**: Quota cache is refreshed automatically after API requests (when older than `quota_refresh_interval_minutes`) and manually via "Check quotas" in `opencode auth login`. The threshold check uses `soft_quota_cache_ttl_minutes` to determine cache freshness - if cache is older, the account is considered "unknown" and allowed (fail-open). When ALL accounts exceed the threshold, the plugin waits for the earliest quota reset time (like rate limit behavior). If wait time exceeds `max_rate_limit_wait_seconds`, it errors immediately.
+> **How it works**: Quota cache is refreshed automatically after API requests (when older than `quota_refresh_interval_minutes`). Manual "Check live quotas" in `/antigravity-accounts` (OpenCode V2) or `antigravity-accounts quota --all` only displays fresh quota data; it does not refresh the server's soft-quota cache. The threshold check uses `soft_quota_cache_ttl_minutes` to determine cache freshness - if cache is older, the account is considered "unknown" and allowed (fail-open). When ALL accounts exceed the threshold, the plugin waits for the earliest quota reset time (like rate limit behavior). If wait time exceeds `max_rate_limit_wait_seconds`, it errors immediately.
 
 ### Rate Limit Scheduling
 
@@ -859,3 +869,17 @@ By using this plugin, you acknowledge:
 - "Antigravity", "Gemini", "Google Cloud", and "Google" are trademarks of Google LLC.
 
 </details>
+
+### Standalone account command
+
+In V2, `opencode auth login` → Google → OAuth with Google (Antigravity) starts
+Google sign-in directly. Account listing, quotas, verification, rotation,
+removal, and model configuration live in `/antigravity-accounts`, not the login
+flow. The menu provides sign-in guidance but never starts OAuth itself.
+
+For a standalone terminal, use `npm run accounts -- list` (or the installed
+`antigravity-accounts` executable). Commands include `remove 2`,
+`remove --all`, `quota --all`, `verify 1`, `enable 1`, `disable 1`,
+`add [--no-browser]`, `refresh 1`, and `configure-models`. **Close OpenCode
+before using the standalone CLI to change accounts:** it may retain account
+state in memory. Never share the account storage file or the login URL.
