@@ -1175,8 +1175,8 @@ it("removes API key headers", () => {
           "antigravity",
         );
 
-        expect(result.effectiveModel).toBe("gemini-3.1-pro-high");
-        expect(JSON.parse(result.init.body as string).model).toBe("gemini-pro-agent");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-high");
+        expect(JSON.parse(result.init.body as string).model).toBe("gemini-3.8-flash-high");
       });
 
       it("maps unwrapped Antigravity gemini-3.1-pro-high envelope to gemini-pro-agent", () => {
@@ -1197,8 +1197,8 @@ it("removes API key headers", () => {
           "antigravity",
         );
 
-        expect(result.effectiveModel).toBe("gemini-3.1-pro-high");
-        expect(JSON.parse(result.init.body as string).model).toBe("gemini-pro-agent");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-high");
+        expect(JSON.parse(result.init.body as string).model).toBe("gemini-3.8-flash-high");
       });
 
       it("preserves the low Antigravity model and gemini-cli high model", () => {
@@ -1219,7 +1219,7 @@ it("removes API key headers", () => {
           "gemini-cli",
         );
 
-        expect(JSON.parse(lowResult.init.body as string).model).toBe("gemini-3.1-pro-low");
+        expect(JSON.parse(lowResult.init.body as string).model).toBe("gemini-3.8-flash-low");
         expect(JSON.parse(cliResult.init.body as string).model).not.toBe("gemini-pro-agent");
       });
 
@@ -1244,10 +1244,10 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3-pro-low");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-low");
       });
 
-      it("transforms gemini-3.1-pro-preview to gemini-3.1-pro-low for antigravity headerStyle", () => {
+      it("transforms gemini-3.1-pro-preview to gemini-3-pro-low for antigravity headerStyle", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1256,10 +1256,10 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.1-pro-low");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-low");
       });
 
-      it("transforms gemini-3.1-pro-preview-customtools to gemini-3.1-pro-low for antigravity headerStyle", () => {
+      it("transforms gemini-3.1-pro-preview-customtools to gemini-3-pro-low for antigravity headerStyle", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview-customtools:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1268,10 +1268,10 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.1-pro-low");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-low");
       });
 
-      it("transforms gemini-3.5-flash to the Antigravity low backend id for antigravity headerStyle", () => {
+      it("transforms gemini-3.5-flash to the Antigravity medium backend id for antigravity headerStyle", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1280,7 +1280,7 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.5-flash-low");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-medium");
       });
 
       it("injects default thinkingLevel for bare gemini-3.5-flash on antigravity", () => {
@@ -1292,10 +1292,10 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.5-flash-low");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-medium");
         const wrapped = JSON.parse(result.init.body as string);
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
-          thinkingLevel: "low",
+          thinkingLevel: "medium",
           includeThoughts: true,
         });
       });
@@ -1315,10 +1315,10 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.5-flash-low");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-medium");
         const wrapped = JSON.parse(result.init.body as string);
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
-          thinkingLevel: "low",
+          thinkingLevel: "medium",
           includeThoughts: true,
         });
       });
@@ -1343,7 +1343,7 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.5-flash-low");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-medium");
         const wrapped = JSON.parse(result.init.body as string);
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
           thinkingLevel: "medium",
@@ -1371,9 +1371,9 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3-flash-agent");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-high");
         const wrapped = JSON.parse(result.init.body as string);
-        expect(wrapped.model).toBe("gemini-3-flash-agent");
+        expect(wrapped.model).toBe("gemini-3.8-flash-high");
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
           thinkingLevel: "high",
           includeThoughts: true,
@@ -1399,9 +1399,9 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3-flash-agent");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-high");
         const wrapped = JSON.parse(result.init.body as string);
-        expect(wrapped.model).toBe("gemini-3-flash-agent");
+        expect(wrapped.model).toBe("gemini-3.8-flash-high");
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
           thinkingLevel: "high",
           includeThoughts: true,
@@ -1428,9 +1428,9 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.6-flash-medium");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-medium");
         const wrapped = JSON.parse(result.init.body as string);
-        expect(wrapped.model).toBe("gemini-3.6-flash-medium");
+        expect(wrapped.model).toBe("gemini-3.8-flash-medium");
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
           thinkingLevel: "medium",
           includeThoughts: true,
@@ -1456,9 +1456,9 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.6-flash-high");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-high");
         const wrapped = JSON.parse(result.init.body as string);
-        expect(wrapped.model).toBe("gemini-3.6-flash-high");
+        expect(wrapped.model).toBe("gemini-3.8-flash-high");
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
           thinkingLevel: "high",
           includeThoughts: true,
@@ -1480,9 +1480,9 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3.7-flash-high");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-high");
         const wrapped = JSON.parse(result.init.body as string);
-        expect(wrapped.model).toBe("gemini-3.7-flash-high");
+        expect(wrapped.model).toBe("gemini-3.8-flash-high");
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
           thinkingLevel: "high",
           includeThoughts: true,
@@ -1528,9 +1528,9 @@ it("removes API key headers", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3-pro-high");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash-high");
         const wrapped = JSON.parse(result.init.body as string);
-        expect(wrapped.model).toBe("gemini-3-pro-high");
+        expect(wrapped.model).toBe("gemini-3.8-flash-high");
       });
 
       it("transforms gemini-3-flash to gemini-3-flash-preview for gemini-cli headerStyle", () => {
@@ -1545,7 +1545,7 @@ it("removes API key headers", () => {
         expect(result.effectiveModel).toBe("gemini-3-flash-preview");
       });
 
-      it("transforms gemini-3-pro-low to gemini-3-pro-preview for gemini-cli headerStyle", () => {
+      it("transforms gemini-3-pro-low to gemini-3.8-flash for gemini-cli headerStyle via alias", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-low:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1554,10 +1554,10 @@ it("removes API key headers", () => {
           undefined,
           "gemini-cli"
         );
-        expect(result.effectiveModel).toBe("gemini-3-pro-preview");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash");
       });
 
-      it("transforms gemini-3.1-pro-low to gemini-3.1-pro (bare) for gemini-cli headerStyle", () => {
+      it("transforms gemini-3.1-pro-low to gemini-3.8-flash for gemini-cli headerStyle via alias", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-low:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1566,10 +1566,10 @@ it("removes API key headers", () => {
           undefined,
           "gemini-cli"
         );
-        expect(result.effectiveModel).toBe("gemini-3.1-pro");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash");
       });
 
-      it("strips legacy gemini-3.1-pro-preview to bare name for gemini-cli headerStyle", () => {
+      it("transforms gemini-3.1-pro-preview to gemini-3.8-flash for gemini-cli headerStyle via alias", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1578,10 +1578,10 @@ it("removes API key headers", () => {
           undefined,
           "gemini-cli"
         );
-        expect(result.effectiveModel).toBe("gemini-3.1-pro");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash");
       });
 
-      it("keeps gemini-3.5-flash as gemini-3.5-flash (bare) for gemini-cli headerStyle", () => {
+      it("routes retired gemini-3.5-flash to gemini-3.8-flash for gemini-cli headerStyle", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1590,7 +1590,7 @@ it("removes API key headers", () => {
           undefined,
           "gemini-cli"
         );
-        expect(result.effectiveModel).toBe("gemini-3.5-flash");
+        expect(result.effectiveModel).toBe("gemini-3.8-flash");
       });
 
       it("injects default thinkingLevel for bare gemini-3.5-flash on gemini-cli", () => {
@@ -1604,15 +1604,16 @@ it("removes API key headers", () => {
         );
         const wrapped = JSON.parse(result.init.body as string);
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
-          thinkingLevel: "low",
+          thinkingLevel: "medium",
           includeThoughts: true,
         });
       });
 
       it.each([
-        ["gemini-3.6-flash", "medium"],
-        ["gemini-3.5-flash-lite", "minimal"],
-      ])("keeps %s bare with its default thinking level on gemini-cli", (model, thinkingLevel) => {
+        ["gemini-3.6-flash", "gemini-3.8-flash", "medium"],
+        ["gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "minimal"],
+        ["gemini-3.5-flash-lite", "gemini-3.5-flash-lite", "minimal"],
+      ])("routes %s on gemini-cli with expected model and thinking level", (model, expectedModel, thinkingLevel) => {
         const result = prepareAntigravityRequest(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1621,7 +1622,7 @@ it("removes API key headers", () => {
           undefined,
           "gemini-cli"
         );
-        expect(result.effectiveModel).toBe(model);
+        expect(result.effectiveModel).toBe(expectedModel);
         const wrapped = JSON.parse(result.init.body as string);
         expect(wrapped.request.generationConfig.thinkingConfig).toMatchObject({
           thinkingLevel,

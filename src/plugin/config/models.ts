@@ -55,21 +55,14 @@ const DEFAULT_MODALITIES: ModelModalities = {
 };
 
 export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
-  "antigravity-gemini-3-pro": {
-    name: "Gemini 3 Pro (Antigravity)",
-    limit: { context: 1048576, output: 65535 },
+  "antigravity-gemini-3.8-flash": {
+    name: "Gemini 3.8 Flash (Antigravity)",
+    temperature: false,
+    limit: { context: 1048576, output: 65536 },
     modalities: DEFAULT_MODALITIES,
     variants: {
       low: { thinkingLevel: "low" },
-      high: { thinkingLevel: "high" },
-    },
-  },
-  "antigravity-gemini-3.1-pro": {
-    name: "Gemini 3.1 Pro (Antigravity)",
-    limit: { context: 1048576, output: 65535 },
-    modalities: DEFAULT_MODALITIES,
-    variants: {
-      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
       high: { thinkingLevel: "high" },
     },
   },
@@ -84,9 +77,10 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
-  "antigravity-gemini-3.5-flash": {
-    name: "Gemini 3.5 Flash (Antigravity)",
-    limit: { context: 1048576, output: 65536 },
+  "antigravity-gemini-3.1-flash-lite": {
+    name: "Gemini 3.1 Flash Lite (Antigravity)",
+    temperature: false,
+    limit: { context: 1048576, output: 65535 },
     modalities: DEFAULT_MODALITIES,
     variants: {
       minimal: { thinkingLevel: "minimal" },
@@ -95,34 +89,13 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
-  "antigravity-gemini-3.6-flash": {
-    name: "Gemini 3.6 Flash (Antigravity)",
+  "antigravity-gemini-3.5-flash-lite": {
+    name: "Gemini 3.5 Flash Lite (Antigravity)",
     temperature: false,
-    limit: { context: 1048576, output: 65536 },
+    limit: { context: 1048576, output: 65535 },
     modalities: DEFAULT_MODALITIES,
     variants: {
-      low: { thinkingLevel: "low" },
-      medium: { thinkingLevel: "medium" },
-      high: { thinkingLevel: "high" },
-    },
-  },
-  "antigravity-gemini-3.7-flash": {
-    name: "Gemini 3.7 Flash (Antigravity)",
-    temperature: false,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-    variants: {
-      low: { thinkingLevel: "low" },
-      medium: { thinkingLevel: "medium" },
-      high: { thinkingLevel: "high" },
-    },
-  },
-  "antigravity-gemini-3.8-flash": {
-    name: "Gemini 3.8 Flash (Antigravity)",
-    temperature: false,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-    variants: {
+      minimal: { thinkingLevel: "minimal" },
       low: { thinkingLevel: "low" },
       medium: { thinkingLevel: "medium" },
       high: { thinkingLevel: "high" },
@@ -161,6 +134,18 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
     name: "Gemini 3.5 Flash (Gemini CLI)",
     limit: { context: 1048576, output: 65536 },
     modalities: DEFAULT_MODALITIES,
+  },
+  "gemini-3.1-flash-lite": {
+    name: "Gemini 3.1 Flash-Lite (Gemini CLI)",
+    temperature: false,
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      minimal: { thinkingLevel: "minimal" },
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    },
   },
   "gemini-3.5-flash-lite": {
     name: "Gemini 3.5 Flash-Lite (Gemini CLI)",

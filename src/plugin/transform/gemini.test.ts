@@ -73,6 +73,8 @@ describe("transform/gemini", () => {
       "gemini-3.8-flash",
       "gemini-3.8-flash-medium",
       "antigravity-gemini-3.8-flash-high",
+      "gemini-3.1-flash-lite",
+      "antigravity-gemini-3.1-flash-lite",
       "gemini-3.5-flash-lite",
     ])("removes deprecated sampling fields for %s", (model) => {
       const payload: RequestPayload = {

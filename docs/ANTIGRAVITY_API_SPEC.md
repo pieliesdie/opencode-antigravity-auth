@@ -80,9 +80,14 @@ Accept: text/event-stream
 |------------|----------|------|--------|
 | Claude Sonnet 4.6 | `claude-sonnet-4-6` | Anthropic | ✅ Verified |
 | Claude Opus 4.6 Thinking | `claude-opus-4-6-thinking` | Anthropic | ✅ Verified |
-| Gemini 3 Pro High | `gemini-3-pro-high` | Google | ✅ Verified |
-| Gemini 3 Pro Low | `gemini-3-pro-low` | Google | ✅ Verified |
+| Gemini 3.8 Flash | `gemini-3.8-flash` | Google | ✅ Verified |
+| Gemini 3 Flash | `gemini-3-flash` | Google | ✅ Verified |
+| Gemini 3.1 Flash Lite | `gemini-3.1-flash-lite` | Google | ✅ Verified |
+| Gemini 3.5 Flash Lite | `gemini-3.5-flash-lite` | Google | ✅ Verified |
 | GPT-OSS 120B Medium | `gpt-oss-120b-medium` | Other | ✅ Verified |
+| Gemini 3 Pro | `gemini-3-pro`, `gemini-3-pro-high`, `gemini-3-pro-low` | Google | ❌ Retired (removed by Google, routed to Gemini 3.8 Flash) |
+| Gemini 3.1 Pro | `gemini-3.1-pro` | Google | ❌ Retired (removed by Google, routed to Gemini 3.8 Flash) |
+| Gemini Pro Agent | `gemini-pro-agent` | Google | ❌ Retired (removed by Google, routed to Gemini 3.8 Flash) |
 
 ---
 

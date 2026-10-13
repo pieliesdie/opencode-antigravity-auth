@@ -150,7 +150,7 @@ describe("api-key agy sdk support", () => {
 
   it("preserves Request input method, headers, and body when routing through API-key auth", async () => {
     const original = new Request(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?key=old-url-key",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?key=old-url-key",
       {
         method: "POST",
         headers: {
@@ -185,7 +185,7 @@ describe("api-key agy sdk support", () => {
 
   it("adds default Gemini 3 thinking config without dropping extra body options", async () => {
     const prepared = await prepareAgySdkGeminiRequest(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
       {
         method: "POST",
         body: JSON.stringify({

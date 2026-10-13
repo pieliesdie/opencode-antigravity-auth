@@ -46,19 +46,30 @@ export const MODEL_ALIASES: Record<string, string> = {
   "gemini-flash-latest": "gemini-3.8-flash",
   "gemini-flash-lite-latest": "gemini-3.5-flash-lite",
 
-  // Gemini 3 variants - for Gemini CLI only (tier stripped, thinkingLevel used)
-  // For Antigravity, these are bypassed and full model name is kept
-  "gemini-3-pro-low": "gemini-3-pro",
-  "gemini-3-pro-high": "gemini-3-pro",
-  "gemini-3.1-pro-low": "gemini-3.1-pro",
-  "gemini-3.1-pro-high": "gemini-3.1-pro",
+  // Retired Pro models routed to gemini-3.8-flash
+  "gemini-3-pro": "gemini-3.8-flash",
+  "gemini-3-pro-low": "gemini-3.8-flash",
+  "gemini-3-pro-high": "gemini-3.8-flash",
+  "gemini-3.1-pro": "gemini-3.8-flash",
+  "gemini-3.1-pro-low": "gemini-3.8-flash",
+  "gemini-3.1-pro-high": "gemini-3.8-flash",
+
+  // Retired intermediate Flash models routed to gemini-3.8-flash
+  "gemini-3.5-flash": "gemini-3.8-flash",
+  "gemini-3.5-flash-low": "gemini-3.8-flash",
+  "gemini-3.5-flash-medium": "gemini-3.8-flash",
+  "gemini-3.5-flash-high": "gemini-3.8-flash",
+  "gemini-3.6-flash": "gemini-3.8-flash",
+  "gemini-3.7-flash": "gemini-3.8-flash",
+  "gemini-3.7-flash-minimal": "gemini-3.8-flash",
+  "gemini-3.7-flash-low": "gemini-3.8-flash",
+  "gemini-3.7-flash-medium": "gemini-3.8-flash",
+  "gemini-3.7-flash-high": "gemini-3.8-flash",
+
+  // Active Gemini 3 Flash variants
   "gemini-3-flash-low": "gemini-3-flash",
   "gemini-3-flash-medium": "gemini-3-flash",
   "gemini-3-flash-high": "gemini-3-flash",
-  "gemini-3.7-flash-minimal": "gemini-3.7-flash",
-  "gemini-3.7-flash-low": "gemini-3.7-flash",
-  "gemini-3.7-flash-medium": "gemini-3.7-flash",
-  "gemini-3.7-flash-high": "gemini-3.7-flash",
 
   // Claude proxy names (gemini- prefix for compatibility)
   "gemini-claude-opus-4-6-thinking-low": "claude-opus-4-6-thinking",
@@ -73,7 +84,7 @@ export const MODEL_ALIASES: Record<string, string> = {
 
 const TIER_REGEX = /-(minimal|low|medium|high)$/;
 const QUOTA_PREFIX_REGEX = /^antigravity-/i;
-const GEMINI_3_PRO_REGEX = /^gemini-3(?:\.\d+)?-pro/i;
+const GEMINI_3_PRO_REGEX = /^gemini-(?:3(?:\.\d+)?-pro|pro-agent)/i;
 const GEMINI_3_FLASH_REGEX = /^gemini-3(?:\.\d+)?-flash/i;
 const GEMINI_35_FLASH_REGEX =
   /^gemini-3\.5-flash(?:-(minimal|low|medium|high))?$/i;
@@ -184,7 +195,7 @@ export function isGemini3FlashModel(model: string): boolean {
 
 /**
  * Cloud Code does not expose a bare `gemini-3.5-flash` backend id.
- * Antigravity/agy resolves the UI model to these advertised ids instead.
+ * Retired intermediate Flash models route to gemini-3.8-flash backend ids.
  */
 export function resolveAntigravityGemini35FlashBackendModel(
   model: string,
@@ -196,15 +207,13 @@ export function resolveAntigravityGemini35FlashBackendModel(
     return undefined;
   }
 
-  const level = (thinkingLevel ?? match[1] ?? "low").toLowerCase();
-  return level === "high"
-    ? GEMINI_35_FLASH_HIGH_MODEL
-    : GEMINI_35_FLASH_LOW_MODEL;
+  const rawLevel = (thinkingLevel ?? match[1] ?? "low").toLowerCase();
+  const level = rawLevel === "high" ? "high" : rawLevel === "medium" ? "medium" : "low";
+  return GEMINI_38_FLASH_MODELS[level];
 }
 
 /**
- * Antigravity exposes Gemini 3.6 Flash as separate tier-specific backend ids.
- * The public Gemini API and Gemini CLI continue to use the bare stable id.
+ * Antigravity exposes Gemini 3.6 Flash as retired; routes to gemini-3.8-flash backend ids.
  */
 export function resolveAntigravityGemini36FlashBackendModel(
   model: string,
@@ -221,12 +230,11 @@ export function resolveAntigravityGemini36FlashBackendModel(
   if (level !== "low" && level !== "medium" && level !== "high") {
     return undefined;
   }
-  return GEMINI_36_FLASH_MODELS[level];
+  return GEMINI_38_FLASH_MODELS[level];
 }
 
 /**
- * AGY exposes Gemini 3.7 Flash only through tier-specific backend ids.
- * Minimal is retained as a compatibility alias for low, but is not advertised.
+ * AGY exposes Gemini 3.7 Flash as retired; routes to gemini-3.8-flash backend ids.
  */
 export function resolveAntigravityGemini37FlashBackendModel(
   model: string,
@@ -243,7 +251,24 @@ export function resolveAntigravityGemini37FlashBackendModel(
   if (level !== "low" && level !== "medium" && level !== "high") {
     return undefined;
   }
-  return GEMINI_37_FLASH_MODELS[level];
+  return GEMINI_38_FLASH_MODELS[level];
+}
+
+/**
+ * Antigravity exposes Gemini 3 Pro models as retired; routes to gemini-3.8-flash backend ids.
+ */
+export function resolveAntigravityGemini3ProBackendModel(
+  model: string,
+  thinkingLevel?: string,
+): string | undefined {
+  const modelWithoutQuota = model.replace(QUOTA_PREFIX_REGEX, "");
+  if (!isGemini3ProModel(modelWithoutQuota) || IMAGE_GENERATION_MODELS.test(modelWithoutQuota)) {
+    return undefined;
+  }
+  const tierMatch = modelWithoutQuota.match(TIER_REGEX);
+  const rawLevel = (thinkingLevel ?? tierMatch?.[1] ?? "low").toLowerCase();
+  const level = rawLevel === "high" ? "high" : rawLevel === "medium" ? "medium" : "low";
+  return GEMINI_38_FLASH_MODELS[level];
 }
 
 /**
@@ -274,7 +299,7 @@ export function getDefaultGemini3ThinkingLevel(model: string): string {
   if (/^gemini-3\.[678]-flash(?:-|$)/.test(normalized)) {
     return "medium";
   }
-  if (/^gemini-3\.5-flash-lite(?:-|$)/.test(normalized)) {
+  if (/^gemini-3\.[15]-flash-lite(?:-|$)/.test(normalized)) {
     return "minimal";
   }
   return "low";
@@ -347,19 +372,32 @@ export function resolveModelWithTier(
       resolveAntigravityGemini36FlashBackendModel(modelWithoutQuota, effectiveTier);
     const gemini35FlashBackendModel =
       resolveAntigravityGemini35FlashBackendModel(modelWithoutQuota, tier);
+    const gemini3ProBackendModel =
+      resolveAntigravityGemini3ProBackendModel(modelWithoutQuota, tier);
     if (gemini38FlashBackendModel) {
       antigravityModel = gemini38FlashBackendModel;
     } else if (gemini37FlashBackendModel) {
       antigravityModel = gemini37FlashBackendModel;
       if (String(effectiveTier) === "minimal") {
         effectiveTier = "low";
+      } else if (!effectiveTier) {
+        effectiveTier = "medium";
       }
     } else if (gemini36FlashBackendModel) {
       antigravityModel = gemini36FlashBackendModel;
+      if (!effectiveTier) {
+        effectiveTier = "medium";
+      }
     } else if (gemini35FlashBackendModel) {
       antigravityModel = gemini35FlashBackendModel;
-    } else if (isGemini3Pro && !effectiveTier && !isImageModel) {
-      antigravityModel = `${modelWithoutQuota}-low`;
+      if (!effectiveTier) {
+        effectiveTier = "low";
+      }
+    } else if (gemini3ProBackendModel) {
+      antigravityModel = gemini3ProBackendModel;
+      if (!effectiveTier) {
+        effectiveTier = "low";
+      }
     } else if (isGemini3Flash && effectiveTier) {
       antigravityModel = baseName;
     }
@@ -526,9 +564,14 @@ export function resolveModelForHeaderStyle(
   requestedModel: string,
   headerStyle: "antigravity" | "gemini-cli" | "agy-sdk",
 ): ResolvedModel {
+  const tier = extractThinkingTierFromModel(requestedModel);
   const aliasResolvedModel = MODEL_ALIASES[requestedModel];
   if (aliasResolvedModel) {
-    return resolveModelForHeaderStyle(aliasResolvedModel, headerStyle);
+    const targetModel =
+      tier && !extractThinkingTierFromModel(aliasResolvedModel)
+        ? `${aliasResolvedModel}-${tier}`
+        : aliasResolvedModel;
+    return resolveModelForHeaderStyle(targetModel, headerStyle);
   }
 
   const lower = requestedModel.toLowerCase();

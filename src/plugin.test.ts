@@ -122,16 +122,17 @@ describe("createAntigravityPlugin provider models", () => {
         input: { text: true, image: true, pdf: true },
         output: { text: true },
       });
-      expect(models?.["antigravity-gemini-3-pro"]).toMatchObject({
-        id: "antigravity-gemini-3-pro",
+      expect(models?.["antigravity-gemini-3.8-flash"]).toMatchObject({
+        id: "antigravity-gemini-3.8-flash",
         providerID: "google",
-        api: { id: "antigravity-gemini-3-pro" },
+        api: { id: "antigravity-gemini-3.8-flash" },
       });
-      expect(models?.["antigravity-gemini-3.6-flash"]?.capabilities).toMatchObject({
+      expect(models?.["antigravity-gemini-3.1-flash-lite"]?.capabilities).toMatchObject({
         temperature: false,
         reasoning: true,
       });
-      expect(models?.["antigravity-gemini-3.7-flash"]?.capabilities).toMatchObject({
+      expect(models?.["antigravity-gemini-3.5-flash-lite"]?.capabilities).toMatchObject({
+        temperature: false,
         reasoning: true,
       });
       expect(models?.["gemini-3.7-flash"]?.capabilities).toMatchObject({
