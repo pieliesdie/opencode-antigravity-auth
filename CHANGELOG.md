@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.5] - 2026-10-14
+
+### Changed
+
+- **V2 Providers Section Support** - Added full support for OpenCode V2 `providers` (plural) configuration alongside legacy `provider` (singular), generating native V2 model definitions with `capabilities` and array-based `variants`.
+- **Cleaned Configurator Models** - Removed legacy 2.5 and retired Pro/intermediate Flash models from the configurator definitions, keeping only the active Antigravity and direct CLI models.
+
 ## [2.0.4] - 2026-10-13
 
 ### Changed

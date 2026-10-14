@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { OPENCODE_MODEL_DEFINITIONS } from "./models";
+import { OPENCODE_MODEL_DEFINITIONS, toV2ModelDefinitions } from "./models";
 
 // =============================================================================
 // Types
@@ -22,8 +22,17 @@ export interface UpdateConfigResult {
 export interface OpencodeConfig {
   $schema?: string;
   plugin?: string[];
+  plugins?: string[];
   provider?: {
     google?: {
+      models?: Record<string, unknown>;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  providers?: {
+    google?: {
+      package?: string;
       models?: Record<string, unknown>;
       [key: string]: unknown;
     };
@@ -142,16 +151,25 @@ export async function updateOpencodeConfig(
       config.plugin.push(PLUGIN_NAME);
     }
 
-    // Ensure provider.google structure exists
-    if (!config.provider) {
-      config.provider = {};
-    }
-    if (!config.provider.google) {
-      config.provider.google = {};
-    }
+    // Replace google models with plugin models, respecting both providers (v2) and provider (v1)
+    const hasProviders = config.providers && typeof config.providers === "object";
+    const hasProvider = config.provider && typeof config.provider === "object";
 
-    // Replace google models with plugin models
-    config.provider.google.models = { ...OPENCODE_MODEL_DEFINITIONS };
+    if (hasProviders) {
+      config.providers!.google ??= {};
+      config.providers!.google.models = toV2ModelDefinitions(OPENCODE_MODEL_DEFINITIONS);
+    }
+    if (hasProvider) {
+      config.provider!.google ??= {};
+      config.provider!.google.models = { ...OPENCODE_MODEL_DEFINITIONS };
+    }
+    if (!hasProviders && !hasProvider) {
+      config.provider = {
+        google: {
+          models: { ...OPENCODE_MODEL_DEFINITIONS },
+        },
+      };
+    }
 
     // Ensure config directory exists
     const configDir = dirname(configPath);
@@ -185,9 +203,38 @@ export async function updateV2ModelsConfig(
     const config: OpencodeConfig = existsSync(configPath)
       ? JSON.parse(stripJsonCommentsAndTrailingCommas(readFileSync(configPath, "utf-8"))) as OpencodeConfig
       : { $schema: SCHEMA_URL };
-    config.provider ??= {};
-    config.provider.google ??= {};
-    config.provider.google.models = { ...OPENCODE_MODEL_DEFINITIONS };
+
+    const v2Definitions = toV2ModelDefinitions(OPENCODE_MODEL_DEFINITIONS);
+
+    // Support both `providers` (OpenCode v2 native plural) and `provider` (legacy/v1 format supported by v2)
+    const hasProviders = config.providers && typeof config.providers === "object";
+    const hasProvider = config.provider && typeof config.provider === "object";
+
+    if (hasProviders) {
+      config.providers!.google ??= {};
+      config.providers!.google.models = v2Definitions;
+    }
+    if (hasProvider) {
+      config.provider!.google ??= {};
+      config.provider!.google.models = v2Definitions;
+    }
+    if (!hasProviders && !hasProvider) {
+      if (Array.isArray(config.plugins)) {
+        config.providers = {
+          google: {
+            package: "aisdk:@ai-sdk/google",
+            models: v2Definitions,
+          },
+        };
+      } else {
+        config.provider = {
+          google: {
+            models: v2Definitions,
+          },
+        };
+      }
+    }
+
     mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
     return { success: true, configPath };

@@ -58,4 +58,30 @@ describe("V2 model configuration", () => {
     expect(config.provider.google.models.old).toBeUndefined()
     expect(Object.keys(config.provider.google.models).length).toBeGreaterThan(0)
   })
+
+  it("updates providers.google.models when providers (plural) is present in V2 config", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "antigravity-v2-config-"))
+    dirs.push(dir)
+    const configPath = join(dir, "opencode.jsonc")
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        plugins: ["@pieliesdie/opencode-antigravity-auth"],
+        providers: {
+          google: {
+            package: "aisdk:@ai-sdk/google",
+            models: { "old-model": {} },
+          },
+        },
+      }),
+    )
+
+    const result = await updateV2ModelsConfig({ configPath })
+    expect(result.success).toBe(true)
+    const config = JSON.parse(await readFile(configPath, "utf8"))
+    expect(config.providers.google.models["old-model"]).toBeUndefined()
+    expect(config.providers.google.models["antigravity-gemini-3.8-flash"]).toBeDefined()
+    expect(config.providers.google.models["antigravity-gemini-3.8-flash"].variants).toBeInstanceOf(Array)
+    expect(config.providers.google.package).toBe("aisdk:@ai-sdk/google")
+  })
 })
