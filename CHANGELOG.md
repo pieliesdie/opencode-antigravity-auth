@@ -6,6 +6,8 @@
 
 - **V2 Providers Section Support** - Added full support for OpenCode V2 `providers` (plural) configuration alongside legacy `provider` (singular), generating native V2 model definitions with `capabilities` and array-based `variants`.
 - **Cleaned Configurator Models** - Removed legacy 2.5 and retired Pro/intermediate Flash models from the configurator definitions, keeping only the active Antigravity and direct CLI models.
+- **Accounts are sticky by default** - `account_selection_strategy` now defaults to `sticky` instead of `hybrid`. Gemini's prompt cache belongs to one account, and hybrid switched accounts at the start of most turns and every few dozen steps, so the request after each switch re-read the whole conversation: 10-30s at 300K tokens instead of about 5s. Sticky keeps one account until it is rate-limited. Set `"account_selection_strategy": "hybrid"` to spread load across accounts again.
+- **Gemini 3.8 Flash has a 256K context window** - It was 1M, so OpenCode only compacted a session near a million tokens and long sessions ran at 300K+ tokens per request. Antigravity itself works within 256K for this model. A config that sets its own `limit` keeps it. Model discovery no longer replaces a curated model's limit with the registry's 1M.
 
 ### Removed
 

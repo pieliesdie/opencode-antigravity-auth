@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import { AgySdkCloudProjectSchema, AntigravityConfigSchema, DEFAULT_CONFIG } from "./schema";
 
+describe("account_selection_strategy config", () => {
+  it("defaults to sticky so the per-account prompt cache stays warm", () => {
+    expect(DEFAULT_CONFIG.account_selection_strategy).toBe("sticky");
+    expect(AntigravityConfigSchema.parse({}).account_selection_strategy).toBe("sticky");
+  });
+});
+
 describe("removed cli_first option", () => {
   it("is gone from DEFAULT_CONFIG and the JSON schema", () => {
     expect(DEFAULT_CONFIG).not.toHaveProperty("cli_first");
