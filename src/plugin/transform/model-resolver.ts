@@ -68,6 +68,18 @@ const GEMINI_38_FLASH_MODELS = {
   medium: "gemini-3.8-flash-medium",
   high: "gemini-3.8-flash-high",
 } as const;
+const GEMINI_4_ARGON_REGEX =
+  /^gemini-4-argon(?:-(minimal|low|medium|high))?$/i;
+const GEMINI_4_ARGON_MODELS = {
+  low: "gemini-4-argon-low",
+  medium: "gemini-4-argon-medium",
+  high: "gemini-4-argon-high",
+} as const;
+/**
+ * Gemini generations that take a thinkingLevel string and thought signatures:
+ * Gemini 3 and every later one (gemini-3.8-flash, gemini-4-argon, ...).
+ */
+const GEMINI_3_OR_LATER_REGEX = /gemini-(?:[3-9]|[1-9]\d+)(?=[.-]|$)/i;
 
 /**
  * Image generation models - always route to Antigravity.
@@ -85,7 +97,7 @@ const IMAGE_GENERATION_MODELS = /image|imagen/i;
 function supportsThinkingTiers(model: string): boolean {
   const lower = model.toLowerCase();
   return (
-    lower.includes("gemini-3") ||
+    isGemini3OrLaterModel(lower) ||
     lower.includes("gemini-2.5") ||
     (lower.includes("claude") && lower.includes("thinking"))
   );
@@ -127,13 +139,26 @@ function isThinkingCapableModel(model: string): boolean {
   const lower = model.toLowerCase();
   return (
     lower.includes("thinking") ||
-    lower.includes("gemini-3") ||
+    isGemini3OrLaterModel(lower) ||
     lower.includes("gemini-2.5")
   );
 }
 
 export function isGemini3FlashModel(model: string): boolean {
   return GEMINI_3_FLASH_REGEX.test(model);
+}
+
+/**
+ * True for Gemini 3 and later (Gemini 4 Argon included): the generations that
+ * take a thinkingLevel instead of a budget and return thought signatures.
+ */
+export function isGemini3OrLaterModel(model: string): boolean {
+  return GEMINI_3_OR_LATER_REGEX.test(model);
+}
+
+/** True for Gemini 4 Argon under any of its names or backend ids. */
+export function isGemini4ArgonModel(model: string): boolean {
+  return /(?:^|[-/])gemini-4-argon(?:-|$)/i.test(model);
 }
 
 /**
@@ -158,8 +183,33 @@ export function resolveAntigravityGemini38FlashBackendModel(
   return GEMINI_38_FLASH_MODELS[level];
 }
 
+/**
+ * Antigravity serves Gemini 4 Argon (Google AI Ultra only) as tier-specific
+ * backend ids, gemini-4-argon-{low,medium,high}, like 3.8 Flash. High is the
+ * default; minimal is accepted as low.
+ */
+export function resolveAntigravityGemini4ArgonBackendModel(
+  model: string,
+  thinkingLevel?: string,
+): string | undefined {
+  const match = model.replace(QUOTA_PREFIX_REGEX, "").match(GEMINI_4_ARGON_REGEX);
+  if (!match) {
+    return undefined;
+  }
+  const rawLevel = (thinkingLevel ?? match[1] ?? "high").toLowerCase();
+  const level = rawLevel === "minimal" ? "low" : rawLevel;
+  if (level !== "low" && level !== "medium" && level !== "high") {
+    return undefined;
+  }
+  return GEMINI_4_ARGON_MODELS[level];
+}
+
 export function getDefaultGemini3ThinkingLevel(model: string): string {
   const normalized = model.toLowerCase().replace(QUOTA_PREFIX_REGEX, "");
+  const argon = /^gemini-4-argon(?:-(low|medium|high))?$/.exec(normalized);
+  if (argon) {
+    return argon[1] ?? "high";
+  }
   if (/^gemini-3\.[678]-flash(?:-|$)/.test(normalized)) {
     return "medium";
   }
@@ -197,20 +247,28 @@ export function resolveModelWithTier(requestedModel: string): ResolvedModel {
   const quotaPreference = "antigravity" as const;
   const explicitQuota = isAntigravity || isImageModel;
 
-  const isGemini3 = modelWithoutQuota.toLowerCase().startsWith("gemini-3");
+  const isGemini3 = isGemini3OrLaterModel(modelWithoutQuota);
   const skipAlias = isAntigravity && isGemini3;
 
-  // Antigravity API: gemini-3.8-flash uses tier-specific backend ids
+  // Antigravity API: gemini-3.8-flash and gemini-4-argon use tier-specific backend ids
   //                  other gemini-3 flash models use bare name + thinkingLevel param
   const isGemini3Flash = isGemini3FlashModel(modelWithoutQuota);
 
-  const effectiveTier = tier;
+  let effectiveTier = tier;
   let antigravityModel = modelWithoutQuota;
   if (skipAlias) {
     const gemini38FlashBackendModel =
       resolveAntigravityGemini38FlashBackendModel(modelWithoutQuota, tier);
+    const gemini4ArgonBackendModel =
+      resolveAntigravityGemini4ArgonBackendModel(modelWithoutQuota, tier);
     if (gemini38FlashBackendModel) {
       antigravityModel = gemini38FlashBackendModel;
+    } else if (gemini4ArgonBackendModel) {
+      antigravityModel = gemini4ArgonBackendModel;
+      // Argon rejects thinkingLevel "minimal"; its low backend id is the closest.
+      if (String(effectiveTier) === "minimal") {
+        effectiveTier = "low";
+      }
     } else if (isGemini3Flash && effectiveTier) {
       antigravityModel = baseName;
     }
@@ -236,7 +294,7 @@ export function resolveModelWithTier(requestedModel: string): ResolvedModel {
   }
 
   // Check if this is a Gemini 3 model (works for both aliased and skipAlias paths)
-  const isEffectiveGemini3 = resolvedModel.toLowerCase().includes("gemini-3");
+  const isEffectiveGemini3 = isGemini3OrLaterModel(resolvedModel);
   const isClaudeThinking =
     resolvedModel.toLowerCase().includes("claude") &&
     resolvedModel.toLowerCase().includes("thinking");
@@ -383,7 +441,7 @@ export function resolveModelForHeaderStyle(
   }
 
   const lower = requestedModel.toLowerCase();
-  const isGemini3 = lower.includes("gemini-3");
+  const isGemini3 = isGemini3OrLaterModel(lower);
 
   if (headerStyle === "agy-sdk") {
     const modelWithTier = requestedModel.replace(/^antigravity-/i, "");
@@ -442,13 +500,19 @@ export function resolveModelWithVariant(
   }
 
   const budget = variantConfig.thinkingBudget;
-  const isGemini3 = base.actualModel.toLowerCase().includes("gemini-3");
+  const isGemini3 = isGemini3OrLaterModel(base.actualModel);
 
   if (isGemini3) {
     const level = budgetToGemini3Level(budget);
+    // Re-pick Argon's tiered backend id so a budget variant cannot pair a
+    // -high backend id with a low thinking level.
+    const argonBackendModel = /^gemini-4-argon-(?:low|medium|high)$/i.test(base.actualModel)
+      ? resolveAntigravityGemini4ArgonBackendModel("gemini-4-argon", level)
+      : undefined;
 
     return {
       ...base,
+      ...(argonBackendModel ? { actualModel: argonBackendModel } : {}),
       thinkingLevel: level,
       thinkingBudget: undefined,
       configSource: "variant",

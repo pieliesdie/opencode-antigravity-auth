@@ -69,6 +69,20 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
+  // Google AI Ultra only. Antigravity serves it as gemini-4-argon-{low,medium,high}
+  // (see resolveAntigravityGemini4ArgonBackendModel). Antigravity's default
+  // context window for it is 256K tokens, smaller than the API's 1M.
+  "antigravity-gemini-4-argon": {
+    name: "Gemini 4 Argon (Antigravity, Ultra)",
+    temperature: false,
+    limit: { context: 262144, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    },
+  },
   "antigravity-gemini-3-flash": {
     name: "Gemini 3 Flash (Antigravity)",
     limit: { context: 1048576, output: 65536 },

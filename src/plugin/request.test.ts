@@ -751,6 +751,87 @@ it("removes API key headers", () => {
       expect(result.effectiveModel).toContain("claude");
     });
 
+    describe("Gemini 4 Argon", () => {
+      it.each([
+        [8192, "low"],
+        [16384, "medium"],
+        [32768, "high"],
+      ])("reselects Argon backend for thinking budget %s", (budget, expected) => {
+        for (const wrapped of [false, true]) {
+          const request = {
+            contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+            providerOptions: { google: { thinkingConfig: { thinkingBudget: budget } } },
+          };
+          const result = prepareAntigravityRequest(
+            "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-argon-high:generateContent",
+            { method: "POST", body: JSON.stringify(wrapped ? { project: mockProjectId, request } : request) },
+            mockAccessToken,
+            mockProjectId,
+            undefined,
+            "antigravity",
+          );
+          const body = JSON.parse(result.init.body as string);
+          expect(body.model).toBe(`gemini-4-argon-${expected}`);
+          expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected);
+          expect(body.request.generationConfig.thinkingConfig).not.toHaveProperty("thinkingBudget");
+        }
+      });
+
+      it.each(["low", "medium", "high", "minimal"])("resolves Argon suffix %s", (tier) => {
+        const result = prepareAntigravityRequest(
+          `https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-argon-${tier}:generateContent`,
+          { method: "POST", body: JSON.stringify({ contents: [] }) },
+          mockAccessToken,
+          mockProjectId,
+          undefined,
+          "antigravity",
+        );
+        const expected = tier === "minimal" ? "low" : tier;
+        const body = JSON.parse(result.init.body as string);
+        expect(body.model).toBe(`gemini-4-argon-${expected}`);
+        expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected);
+      });
+
+      it.each([
+        [undefined, "high"],
+        ["low", "low"],
+        ["medium", "medium"],
+        ["high", "high"],
+        ["minimal", "low"],
+      ])("aligns Argon backend and thinking level for %s", (level, expected) => {
+        for (const wrapped of [false, true]) {
+          const request = {
+            contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+            generationConfig: {
+              temperature: 0.5,
+              topP: 0.8,
+              topK: 20,
+              candidateCount: 2,
+              ...(level ? { thinkingConfig: { thinkingLevel: level } } : {}),
+            },
+          };
+          const result = prepareAntigravityRequest(
+            "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-argon:generateContent",
+            {
+              method: "POST",
+              body: JSON.stringify(wrapped ? { project: mockProjectId, request } : request),
+            },
+            mockAccessToken,
+            mockProjectId,
+            undefined,
+            "antigravity",
+          );
+          const body = JSON.parse(result.init.body as string);
+          expect(result.effectiveModel).toBe(`gemini-4-argon-${expected}`);
+          expect(body.model).toBe(`gemini-4-argon-${expected}`);
+          expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected);
+          for (const field of ["temperature", "topP", "topK", "candidateCount"]) {
+            expect(body.request.generationConfig).not.toHaveProperty(field);
+          }
+        }
+      });
+    });
+
     it("identifies Gemini models correctly", () => {
       const result = prepareAntigravityRequest(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",

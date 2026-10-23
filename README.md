@@ -139,6 +139,7 @@ opencode run "Hello" --model=google/antigravity-claude-opus-4-6-thinking --varia
 | Model | Variants | Notes |
 |-------|----------|-------|
 | `antigravity-gemini-3.8-flash` | low, medium, high | **Newest.** Gemini 3.8 Flash with thinking (medium default) |
+| `antigravity-gemini-4-argon` | low, medium, high | Google AI Ultra; 256K context, high default; minimal maps to low |
 | `antigravity-gemini-3-flash` | minimal, low, medium, high | Gemini 3 Flash with thinking |
 | `antigravity-gemini-3.1-flash-lite` | minimal, low, medium, high | Gemini 3.1 Flash Lite with thinking |
 | `antigravity-gemini-3.5-flash-lite` | minimal, low, medium, high | Gemini 3.5 Flash Lite with thinking |
@@ -180,6 +181,17 @@ Add this to your `~/.config/opencode/opencode.json`:
       "models": {
         "antigravity-gemini-3.8-flash": {
           "name": "Gemini 3.8 Flash (Antigravity)",
+          "limit": { "context": 262144, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
+        "antigravity-gemini-4-argon": {
+          "name": "Gemini 4 Argon (Antigravity, Ultra)",
+          "temperature": false,
           "limit": { "context": 262144, "output": 65536 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
           "variants": {

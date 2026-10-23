@@ -67,6 +67,7 @@ import {
 import {
   resolveModelForHeaderStyle,
   resolveAntigravityGemini38FlashBackendModel,
+  resolveAntigravityGemini4ArgonBackendModel,
   getDefaultGemini3ThinkingLevel,
   isClaudeModel,
   isClaudeThinkingModel,
@@ -134,7 +135,7 @@ function shouldCacheThinkingSignatures(model?: string): boolean {
   const lower = model.toLowerCase();
   // Both Claude and Gemini 3 models require thought signature caching
   // for multi-turn conversations with function calling
-  return lower.includes("claude") || lower.includes("gemini-3");
+  return lower.includes("claude") || isGemini3Model(lower);
 }
 
 /**
@@ -152,7 +153,7 @@ function signatureCacheProjectKey(
   model: string | undefined,
   projectKey: string | undefined,
 ): string | undefined {
-  if (typeof model === "string" && model.toLowerCase().includes("gemini-3")) {
+  if (typeof model === "string" && isGemini3Model(model)) {
     return undefined;
   }
   return projectKey;
@@ -1010,7 +1011,7 @@ function ensureDefaultGemini3ThinkingLevel(
   thinkingLevel?: string,
 ): void {
   if (
-    !effectiveModel.toLowerCase().includes("gemini-3") ||
+    !isGemini3Model(effectiveModel) ||
     isImageGenerationModel(effectiveModel)
   ) {
     return;
@@ -1030,6 +1031,12 @@ function ensureDefaultGemini3ThinkingLevel(
   if (typeof thinkingConfig.thinkingLevel !== "string") {
     thinkingConfig.thinkingLevel =
       thinkingLevel ?? getDefaultGemini3ThinkingLevel(effectiveModel);
+  }
+  if (
+    /^gemini-4-argon-(?:low|medium|high)$/i.test(effectiveModel) &&
+    thinkingConfig.thinkingLevel === "minimal"
+  ) {
+    thinkingConfig.thinkingLevel = "low";
   }
   if (typeof thinkingConfig.includeThoughts !== "boolean") {
     thinkingConfig.includeThoughts = true;
@@ -1341,7 +1348,7 @@ export function prepareAntigravityRequest(
           }
         }
 
-        if (effectiveModel.toLowerCase().includes("gemini-3")) {
+        if (isGemini3Model(effectiveModel)) {
           for (const req of requestObjects) {
             const variantConfig = extractVariantThinkingConfig(
               (req as any).providerOptions as
@@ -1375,9 +1382,20 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
+          const gemini4ArgonBackendModel =
+            resolveAntigravityGemini4ArgonBackendModel(
+              effectiveModel,
+              tierThinkingLevel,
+            );
           if (gemini38FlashBackendModel) {
             effectiveModel = gemini38FlashBackendModel;
             wrappedBody.model = gemini38FlashBackendModel;
+          } else if (gemini4ArgonBackendModel) {
+            effectiveModel = gemini4ArgonBackendModel;
+            wrappedBody.model = gemini4ArgonBackendModel;
+            if (tierThinkingLevel === "minimal") {
+              tierThinkingLevel = "low";
+            }
           }
         }
 
@@ -1475,7 +1493,7 @@ export function prepareAntigravityRequest(
           requestPayload.providerOptions as Record<string, unknown> | undefined,
           rawGenerationConfig,
         );
-        const isGemini3 = effectiveModel.toLowerCase().includes("gemini-3");
+        const isGemini3 = isGemini3Model(effectiveModel);
 
         log.debug(
           `[ThinkingResolution] rawModel=${rawModel} resolvedModel=${effectiveModel} resolvedTier=${tierThinkingLevel ?? "none"} variantLevel=${variantConfig?.thinkingLevel ?? "none"} variantBudget=${variantConfig?.thinkingBudget ?? "none"} providerOptions.google=${JSON.stringify((requestPayload.providerOptions as any)?.google ?? null)} generationConfig.thinkingConfig=${JSON.stringify((rawGenerationConfig as any)?.thinkingConfig ?? null)}`,
@@ -1511,8 +1529,18 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
+          const gemini4ArgonBackendModel =
+            resolveAntigravityGemini4ArgonBackendModel(
+              effectiveModel,
+              tierThinkingLevel,
+            );
           if (gemini38FlashBackendModel) {
             effectiveModel = gemini38FlashBackendModel;
+          } else if (gemini4ArgonBackendModel) {
+            effectiveModel = gemini4ArgonBackendModel;
+            if (tierThinkingLevel === "minimal") {
+              tierThinkingLevel = "low";
+            }
           }
         }
 

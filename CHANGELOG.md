@@ -2,6 +2,10 @@
 
 ## [2.0.5] - 2026-10-14
 
+### Added
+
+- **Gemini 4 Argon** - Added `antigravity-gemini-4-argon` with a 256K context and low/medium/high backend tiers (high by default, minimal maps to low), thinking-level and thought-signature handling, and sampling sanitization. Google AI Ultra is required by the backend; no client-side Ultra gate is applied.
+
 ### Changed
 
 - **V2 Providers Section Support** - Added full support for OpenCode V2 `providers` (plural) configuration alongside legacy `provider` (singular), generating native V2 model definitions with `capabilities` and array-based `variants`.
