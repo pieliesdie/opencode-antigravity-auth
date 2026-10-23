@@ -148,12 +148,7 @@
     "quota_fallback": {
       "default": false,
       "type": "boolean",
-      "description": "Deprecated: accepted for backward compatibility but ignored at runtime. Gemini fallback between Antigravity and Gemini CLI is always enabled."
-    },
-    "cli_first": {
-      "default": false,
-      "type": "boolean",
-      "description": "Prefer gemini-cli routing before Antigravity for Gemini models. When false (default), Antigravity is tried first and gemini-cli is fallback."
+      "description": "Deprecated: accepted for backward compatibility but ignored at runtime."
     },
     "agy_sdk": {
       "default": {

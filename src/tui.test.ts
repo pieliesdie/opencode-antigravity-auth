@@ -51,7 +51,7 @@ describe("V2 Antigravity account command", () => {
 
   it("lists accounts and shows every live quota in one readable dialog without selecting accounts", async () => {
     const state = fixture()
-    state.admin.quotas.mockResolvedValueOnce("a@example.com: claude: 25%, gemini: 75%; gemini-cli: 80%\nb@example.com: quota unavailable")
+    state.admin.quotas.mockResolvedValueOnce("a@example.com: claude: 25%, gemini: 75%; gemini-3.8-flash: 80%\nb@example.com: quota unavailable")
     state.select.mockResolvedValueOnce("list").mockResolvedValueOnce("quotas")
       .mockResolvedValueOnce("close")
     await openAccountMenu(state.ui as never, async () => state.admin as unknown as AccountAdmin)
@@ -62,20 +62,20 @@ describe("V2 Antigravity account command", () => {
     expect(state.confirm).not.toHaveBeenCalled()
     const quotaDialogs = state.alert.mock.calls.map(([value]) => value).filter((value) => value.title.startsWith("Live quotas"))
     expect(quotaDialogs).toHaveLength(1)
-    expect(quotaDialogs[0]!.message).toBe("a@example.com:\n  claude: 25%\n  gemini: 75%\n  gemini-cli: 80%\n\nb@example.com:\n  quota unavailable")
+    expect(quotaDialogs[0]!.message).toBe("a@example.com:\n  claude: 25%\n  gemini: 75%\n  gemini-3.8-flash: 80%\n\nb@example.com:\n  quota unavailable")
     expect(JSON.stringify(state.select.mock.calls)).not.toContain("secret-token")
   })
 
   it("gives every quota and status its own equally indented line without paging accounts", async () => {
     const state = fixture()
-    state.admin.quotas.mockResolvedValueOnce("a@example.com: gemini-flash: 90%, gemini-pro: 75%, claude: 40%; No Gemini CLI quota available\nb@example.com: models/gemini-2.5_flash: 60%, claude: 30%; quota check failed: try again")
+    state.admin.quotas.mockResolvedValueOnce("a@example.com: gemini-flash: 90%, gemini-pro: 75%, claude: 40%\nb@example.com: models/gemini-2.5_flash: 60%, claude: 30%; quota check failed: try again")
     state.select.mockResolvedValueOnce("quotas").mockResolvedValueOnce("close")
     await openAccountMenu(state.ui as never, async () => state.admin as unknown as AccountAdmin)
     expect(state.admin.quotas).toHaveBeenCalledOnce()
     expect(state.alert).toHaveBeenCalledOnce()
     expect(state.alert.mock.calls[0]![0]).toEqual({
       title: "Live quotas · All accounts",
-      message: "a@example.com:\n  gemini-flash: 90%\n  gemini-pro: 75%\n  claude: 40%\n  No Gemini CLI quota available\n\nb@example.com:\n  models/gemini-2.5_flash: 60%\n  claude: 30%\n  quota check failed: try again",
+      message: "a@example.com:\n  gemini-flash: 90%\n  gemini-pro: 75%\n  claude: 40%\n\nb@example.com:\n  models/gemini-2.5_flash: 60%\n  claude: 30%\n  quota check failed: try again",
     })
     expect(state.confirm).not.toHaveBeenCalled()
     expect(state.select).toHaveBeenCalledTimes(2)

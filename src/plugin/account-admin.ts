@@ -89,8 +89,7 @@ export async function createAccountAdmin(
       return results.map((result, index) => {
         const groups = result.quota?.groups
           ? Object.entries(result.quota.groups).map(([name, quota]) => `${name}: ${Math.round((quota.remainingFraction ?? 0) * 100)}%`).join(", ") : ""
-        const cli = result.geminiCliQuota?.models.map((model) => `${model.modelId}: ${Math.round(model.remainingFraction * 100)}%`).join(", ")
-        return redactTokens(`${label(targets[index]!, index)}: ${result.error ?? ([groups || result.quota?.error, cli || result.geminiCliQuota?.error].filter(Boolean).join("; ") || "No quota available")}`, targets)
+        return redactTokens(`${label(targets[index]!, index)}: ${result.error ?? ([groups || result.quota?.error].filter(Boolean).join("; ") || "No quota available")}`, targets)
       }).join("\n")
     },
     async verify(ids) {

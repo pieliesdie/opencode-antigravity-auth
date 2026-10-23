@@ -7,6 +7,12 @@
 - **V2 Providers Section Support** - Added full support for OpenCode V2 `providers` (plural) configuration alongside legacy `provider` (singular), generating native V2 model definitions with `capabilities` and array-based `variants`.
 - **Cleaned Configurator Models** - Removed legacy 2.5 and retired Pro/intermediate Flash models from the configurator definitions, keeping only the active Antigravity and direct CLI models.
 
+### Removed
+
+- **The Gemini CLI quota and its models** - Google deprecated the Gemini CLI quota in favour of Antigravity. The bare CLI models (`gemini-3.8-flash`, `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`, `gemini-3-flash-preview`) left the model list; the `antigravity-` variants cover the same workloads, and requests for those names still go through Antigravity. Requests no longer fall back to the Gemini CLI quota or fetch its usage: a rate-limited Antigravity account switches to another one, then the API-key fallback is tried if configured.
+- **`cli_first` option** - Removed from the config schema. An `antigravity.json` that still sets it loads fine; the key is dropped.
+- **Handling for retired Antigravity models** - Requests for Gemini 3 Pro, 3.1 Pro and 3.5/3.6/3.7 Flash are no longer rewritten to Gemini 3.8 Flash, and their Antigravity backend-id mapping (`-low` defaults for Pro, `gemini-pro-agent`, `gemini-3-flash-agent`, tier-specific 3.5/3.6/3.7 ids) is gone. Such a request goes to Antigravity under the id it names, so a model Google retired fails with the backend's own error instead of answering as a different model. The API-key (public Gemini API) route is unchanged.
+
 ## [2.0.4] - 2026-10-13
 
 ### Changed

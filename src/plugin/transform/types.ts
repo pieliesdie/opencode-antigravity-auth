@@ -108,7 +108,7 @@ export interface ResolvedModel {
   isThinkingModel?: boolean;
   /** Whether this is an image generation model */
   isImageModel?: boolean;
-  /** Quota preference - all models default to antigravity, with CLI as fallback */
+  /** Quota preference - only Antigravity (OAuth) and the public Gemini API (`agy-sdk`) remain */
   quotaPreference?: HeaderStyle;
   /** Whether user explicitly specified quota via suffix (vs default selection) */
   explicitQuota?: boolean;

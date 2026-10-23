@@ -57,8 +57,9 @@ Gemini 3 models use string-based thinking levels. Available levels differ by mod
 | `medium` | ✅ | ✅ | ✅ | Balanced thinking |
 | `high` | ✅ | ✅ | ✅ | Maximum thinking |
 
-> **Note:** Google retired Gemini 3 Pro, Gemini 3.1 Pro, and intermediate Gemini 3 Flash models from Antigravity. Requests for these models automatically route to Gemini 3.8 Flash.
+> **Note:** Google retired Gemini 3 Pro, Gemini 3.1 Pro, and intermediate Gemini 3 Flash models from Antigravity. The plugin sends them under their own ids and does not substitute Gemini 3.8 Flash, so a retired id fails with the backend's error.
 > Defaults are model-specific: Gemini 3.8 Flash uses `medium`, Flash-Lite models use `minimal`, and Gemini 3 Flash uses `medium`.
+> The Gemini CLI quota is deprecated; the bare CLI models are no longer listed and requests no longer fall back to the Gemini CLI quota.
 
 ### Gemini 3.8 Flash Example
 

@@ -1,27 +1,23 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { AgySdkCloudProjectSchema, DEFAULT_CONFIG } from "./schema";
+import { AgySdkCloudProjectSchema, AntigravityConfigSchema, DEFAULT_CONFIG } from "./schema";
 
-describe("cli_first config", () => {
-  it("includes cli_first default in DEFAULT_CONFIG", () => {
-    expect(DEFAULT_CONFIG).toHaveProperty("cli_first", false);
-  });
+describe("removed cli_first option", () => {
+  it("is gone from DEFAULT_CONFIG and the JSON schema", () => {
+    expect(DEFAULT_CONFIG).not.toHaveProperty("cli_first");
 
-  it("documents cli_first in the JSON schema", () => {
     const schemaPath = new URL("../../../assets/antigravity.schema.json", import.meta.url);
     const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as {
-      properties?: Record<string, { type?: string; default?: unknown; description?: string }>;
+      properties?: Record<string, unknown>;
     };
+    expect(schema.properties).not.toHaveProperty("cli_first");
+  });
 
-    const cliFirst = schema.properties?.cli_first;
-    expect(cliFirst).toBeDefined();
-    expect(cliFirst).toMatchObject({
-      type: "boolean",
-      default: false,
-    });
-    expect(typeof cliFirst?.description).toBe("string");
-    expect(cliFirst?.description?.length ?? 0).toBeGreaterThan(0);
+  it("still loads an old config that sets it", () => {
+    const result = AntigravityConfigSchema.partial().safeParse({ cli_first: true });
+    expect(result.success).toBe(true);
+    expect(result.success && result.data).not.toHaveProperty("cli_first");
   });
 });
 

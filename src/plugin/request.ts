@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import {
   ANTIGRAVITY_ENDPOINT,
-  GEMINI_CLI_ENDPOINT,
-  GEMINI_CLI_HEADERS,
   EMPTY_SCHEMA_PLACEHOLDER_NAME,
   EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
   SKIP_THOUGHT_SIGNATURE,
@@ -68,12 +66,7 @@ import {
 } from "./transform";
 import {
   resolveModelForHeaderStyle,
-  resolveAntigravityGemini35FlashBackendModel,
-  resolveAntigravityGemini36FlashBackendModel,
-  resolveAntigravityGemini37FlashBackendModel,
   resolveAntigravityGemini38FlashBackendModel,
-  resolveAntigravityGemini3ProBackendModel,
-  isGemini3ProModel,
   getDefaultGemini3ThinkingLevel,
   isClaudeModel,
   isClaudeThinkingModel,
@@ -1282,7 +1275,7 @@ export function prepareAntigravityRequest(
   stripHostClientHeaders(headers);
   // Strip x-goog-user-project header to prevent 403 auth/license conflicts.
   // This header is added by OpenCode/AI SDK and can force project-level checks
-  // that are not required for Antigravity/Gemini CLI OAuth requests.
+  // that are not required for Antigravity OAuth requests.
   headers.delete("x-goog-user-project");
 
   const match = requestUrl.match(/\/models\/([^:]+):(\w+)/);
@@ -1302,9 +1295,7 @@ export function prepareAntigravityRequest(
   let effectiveModel = resolved.actualModel;
 
   const streaming = rawAction === STREAM_ACTION;
-  const defaultEndpoint =
-    headerStyle === "gemini-cli" ? GEMINI_CLI_ENDPOINT : ANTIGRAVITY_ENDPOINT;
-  const baseEndpoint = endpointOverride ?? defaultEndpoint;
+  const baseEndpoint = endpointOverride ?? ANTIGRAVITY_ENDPOINT;
   const transformedUrl = `${baseEndpoint}/v1internal:${rawAction}${streaming ? "?alt=sse" : ""}`;
 
   const isClaude = isClaudeModel(resolved.actualModel);
@@ -1384,51 +1375,9 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
-          const gemini37FlashBackendModel =
-            resolveAntigravityGemini37FlashBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
-          const gemini36FlashBackendModel =
-            resolveAntigravityGemini36FlashBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
-          const gemini35FlashBackendModel =
-            resolveAntigravityGemini35FlashBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
-          const gemini3ProBackendModel =
-            resolveAntigravityGemini3ProBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
           if (gemini38FlashBackendModel) {
             effectiveModel = gemini38FlashBackendModel;
             wrappedBody.model = gemini38FlashBackendModel;
-          } else if (gemini37FlashBackendModel) {
-            effectiveModel = gemini37FlashBackendModel;
-            wrappedBody.model = gemini37FlashBackendModel;
-          } else if (gemini36FlashBackendModel) {
-            effectiveModel = gemini36FlashBackendModel;
-            wrappedBody.model = gemini36FlashBackendModel;
-          } else if (gemini35FlashBackendModel) {
-            effectiveModel = gemini35FlashBackendModel;
-            wrappedBody.model = gemini35FlashBackendModel;
-          } else if (gemini3ProBackendModel) {
-            effectiveModel = gemini3ProBackendModel;
-            wrappedBody.model = gemini3ProBackendModel;
-          } else if (isGemini3ProModel(effectiveModel)) {
-            const level =
-              tierThinkingLevel === "high"
-                ? "high"
-                : tierThinkingLevel === "medium"
-                  ? "medium"
-                  : "low";
-            const proModel = `gemini-3.8-flash-${level}`;
-            effectiveModel = proModel;
-            wrappedBody.model = proModel;
           }
         }
 
@@ -1562,44 +1511,8 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
-          const gemini37FlashBackendModel =
-            resolveAntigravityGemini37FlashBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
-          const gemini36FlashBackendModel =
-            resolveAntigravityGemini36FlashBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
-          const gemini35FlashBackendModel =
-            resolveAntigravityGemini35FlashBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
-          const gemini3ProBackendModel =
-            resolveAntigravityGemini3ProBackendModel(
-              effectiveModel,
-              tierThinkingLevel,
-            );
           if (gemini38FlashBackendModel) {
             effectiveModel = gemini38FlashBackendModel;
-          } else if (gemini37FlashBackendModel) {
-            effectiveModel = gemini37FlashBackendModel;
-          } else if (gemini36FlashBackendModel) {
-            effectiveModel = gemini36FlashBackendModel;
-          } else if (gemini35FlashBackendModel) {
-            effectiveModel = gemini35FlashBackendModel;
-          } else if (gemini3ProBackendModel) {
-            effectiveModel = gemini3ProBackendModel;
-          } else if (isGemini3ProModel(effectiveModel)) {
-            const level =
-              tierThinkingLevel === "high"
-                ? "high"
-                : tierThinkingLevel === "medium"
-                  ? "medium"
-                  : "low";
-            effectiveModel = `gemini-3.8-flash-${level}`;
           }
         }
 
@@ -2377,11 +2290,6 @@ export function prepareAntigravityRequest(
     headers.set("User-Agent", ANTIGRAVITY_CLI_USER_AGENT);
     headers.delete("X-Goog-Api-Client");
     headers.delete("Client-Metadata");
-  } else {
-    // Gemini CLI mode: match opencode-gemini-auth Code Assist header set exactly
-    headers.set("User-Agent", GEMINI_CLI_HEADERS["User-Agent"]);
-    headers.set("X-Goog-Api-Client", GEMINI_CLI_HEADERS["X-Goog-Api-Client"]);
-    headers.set("Client-Metadata", GEMINI_CLI_HEADERS["Client-Metadata"]);
   }
   filterAllowedHeaders(headers);
   return {

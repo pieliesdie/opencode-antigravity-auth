@@ -25,10 +25,6 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
       "antigravity-gemini-3.1-flash-lite",
       "antigravity-gemini-3.5-flash-lite",
       "antigravity-gemini-3.8-flash",
-      "gemini-3-flash-preview",
-      "gemini-3.1-flash-lite",
-      "gemini-3.5-flash-lite",
-      "gemini-3.8-flash",
     ]);
   });
 
@@ -62,26 +58,6 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
       high: { thinkingLevel: "high" },
     });
     expect(getModel("antigravity-gemini-3.8-flash").temperature).toBe(false);
-    expect(getModel("gemini-3.8-flash").temperature).toBe(false);
-    expect(getModel("gemini-3.8-flash").variants).toEqual({
-      minimal: { thinkingLevel: "minimal" },
-      low: { thinkingLevel: "low" },
-      medium: { thinkingLevel: "medium" },
-      high: { thinkingLevel: "high" },
-    });
-    expect(getModel("gemini-3.1-flash-lite").temperature).toBe(false);
-    expect(getModel("gemini-3.1-flash-lite").variants).toEqual({
-      minimal: { thinkingLevel: "minimal" },
-      low: { thinkingLevel: "low" },
-      medium: { thinkingLevel: "medium" },
-      high: { thinkingLevel: "high" },
-    });
-    expect(getModel("gemini-3.5-flash-lite").variants).toEqual({
-      minimal: { thinkingLevel: "minimal" },
-      low: { thinkingLevel: "low" },
-      medium: { thinkingLevel: "medium" },
-      high: { thinkingLevel: "high" },
-    });
   });
 
   it("defines thinking budget variants for Claude thinking models", () => {

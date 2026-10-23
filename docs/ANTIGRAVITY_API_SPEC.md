@@ -85,9 +85,9 @@ Accept: text/event-stream
 | Gemini 3.1 Flash Lite | `gemini-3.1-flash-lite` | Google | ✅ Verified |
 | Gemini 3.5 Flash Lite | `gemini-3.5-flash-lite` | Google | ✅ Verified |
 | GPT-OSS 120B Medium | `gpt-oss-120b-medium` | Other | ✅ Verified |
-| Gemini 3 Pro | `gemini-3-pro`, `gemini-3-pro-high`, `gemini-3-pro-low` | Google | ❌ Retired (removed by Google, routed to Gemini 3.8 Flash) |
-| Gemini 3.1 Pro | `gemini-3.1-pro` | Google | ❌ Retired (removed by Google, routed to Gemini 3.8 Flash) |
-| Gemini Pro Agent | `gemini-pro-agent` | Google | ❌ Retired (removed by Google, routed to Gemini 3.8 Flash) |
+| Gemini 3 Pro | `gemini-3-pro`, `gemini-3-pro-high`, `gemini-3-pro-low` | Google | ❌ Retired (removed by Google; sent as-is, no substitution) |
+| Gemini 3.1 Pro | `gemini-3.1-pro` | Google | ❌ Retired (removed by Google; sent as-is, no substitution) |
+| Gemini Pro Agent | `gemini-pro-agent` | Google | ❌ Retired (removed by Google; sent as-is, no substitution) |
 
 ---
 
