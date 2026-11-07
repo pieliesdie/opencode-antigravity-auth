@@ -14,9 +14,9 @@ import { z } from "zod";
 /**
  * Account selection strategy for distributing requests across accounts.
  * 
- * - `sticky` (default): Use same account until rate-limited. Preserves prompt cache.
+ * - `sticky`: Use same account until rate-limited. Preserves prompt cache.
  * - `round-robin`: Rotate to next account on every request. Maximum throughput.
- * - `hybrid`: Deterministic selection based on health score + token bucket + LRU freshness.
+ * - `hybrid` (default): Deterministic selection based on health score + token bucket + LRU freshness.
  */
 export const AccountSelectionStrategySchema = z.enum(['sticky', 'round-robin', 'hybrid']);
 export type AccountSelectionStrategy = z.infer<typeof AccountSelectionStrategySchema>;
@@ -342,14 +342,9 @@ export const AntigravityConfigSchema = z.object({
   /**
    * Strategy for selecting accounts when making requests.
    * Env override: OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY
-   *
-   * Sticky by default: Gemini's prompt cache is per account, so every switch
-   * makes the next request re-read the whole conversation (10-30s at a few
-   * hundred thousand tokens instead of ~5s). Sticky still switches on a rate
-   * limit.
-   * @default "sticky"
+   * @default "hybrid"
    */
-  account_selection_strategy: AccountSelectionStrategySchema.default('sticky'),
+  account_selection_strategy: AccountSelectionStrategySchema.default('hybrid'),
   
   /**
    * Enable PID-based account offset for multi-session distribution.
@@ -533,7 +528,7 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
     gemini_api: true,
     antigravity: true,
   },
-  account_selection_strategy: 'sticky',
+  account_selection_strategy: 'hybrid',
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,
   scheduling_mode: 'cache_first',
