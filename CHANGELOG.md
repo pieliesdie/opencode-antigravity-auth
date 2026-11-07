@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.7] - 2026-11-07
+
+### Changed
+
+- **Reverted sticky accounts and the 256K Gemini 3.8 Flash context** - Restored the previous account-selection default and model context-limit behavior by reverting `fba66ec`.
+
 ## [2.0.6] - 2026-10-23
 
 ### Added
