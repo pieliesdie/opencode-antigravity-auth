@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), remove: vi.fn(), replace: vi.fn(), update: vi.fn(), quota: vi.fn(), verify: vi.fn(), sync: vi.fn(), config: vi.fn(), save: vi.fn(), exchange: vi.fn(), callback: vi.fn() }))
 vi.mock("./plugin/storage.ts", () => ({ loadAccounts: mocks.load, removeAccountFromStorage: mocks.remove, replaceAccountInStorage: mocks.replace, updateAccountInStorage: mocks.update, saveAccounts: mocks.save }))
-vi.mock("./antigravity/oauth.ts", () => ({ authorizeAntigravity: async () => ({ url: "https://accounts.example.test/?state=state" }), exchangeAntigravity: mocks.exchange }))
+vi.mock("./antigravity/oauth.ts", () => ({ authorizeAntigravity: async () => ({ url: "https://accounts.example.test/?state=state" }), cancelAuthorization: vi.fn(), exchangeAntigravity: mocks.exchange }))
 vi.mock("./plugin/server.ts", () => ({ startOAuthListener: async () => ({ waitForCallback: mocks.callback, close: async () => undefined }) }))
 vi.mock("./plugin.ts", () => ({ verifyAccountAccess: mocks.verify, syncV2AccountChange: mocks.sync }))
 vi.mock("./plugin/quota.ts", () => ({ checkAccountsQuota: mocks.quota }))

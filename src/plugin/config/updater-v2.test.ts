@@ -82,6 +82,17 @@ describe("V2 model configuration", () => {
     expect(config.providers.google.models["old-model"]).toBeUndefined()
     expect(config.providers.google.models["antigravity-gemini-3.8-flash"]).toBeDefined()
     expect(config.providers.google.models["antigravity-gemini-3.8-flash"].variants).toBeInstanceOf(Array)
+    const models = config.providers.google.models
+    for (const family of ["Argon", "Carbon", "Hydrogen", "Neon"]) {
+      const levels = ["low", "medium", "high"]
+      if (family === "Hydrogen" || family === "Neon") levels.push("xhigh")
+      const id = `gemini-4-${family.toLowerCase()}`
+      expect(models[id]).toBeUndefined()
+      expect(models[`antigravity-${id}`]).toMatchObject({
+        name: `Gemini 4 ${family} (Antigravity)`,
+        variants: levels.map(id => ({ id, settings: { thinkingLevel: id } })),
+      })
+    }
     expect(config.providers.google.package).toBe("aisdk:@ai-sdk/google")
   })
 })

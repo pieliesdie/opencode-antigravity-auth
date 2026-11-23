@@ -194,7 +194,7 @@ These settings are `false` by default:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `proactive_token_refresh` | `true` | Refresh tokens before expiry |
+| `proactive_token_refresh` | `false` | Refresh on demand. Set to `true` to renew idle accounts in the background before expiry. Concurrent renewals for the same token share one exchange. |
 | `proactive_refresh_buffer_seconds` | `1800` | Refresh 30 min before expiry |
 | `proactive_refresh_check_interval_seconds` | `300` | Check interval |
 

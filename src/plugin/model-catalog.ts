@@ -8,7 +8,9 @@
  * new and updated models directly from Google's registries without requiring manual
  * plugin updates.
  */
+import { createHash } from "node:crypto"
 import type { AntigravityAvailableModels, GeminiApiModel } from "./config/models";
+import { supportsGeminiGeneration } from "./config/models.ts"
 
 const CATALOG_TTL_MS = 60 * 60 * 1000;
 
@@ -23,7 +25,11 @@ interface AntigravityModelCatalog {
 }
 
 let catalog: PublicModelCatalog | undefined;
-let antigravityCatalog: AntigravityModelCatalog | undefined;
+const publicCatalogsByKey = new Map<string, PublicModelCatalog>()
+const antigravityCatalog = new Map<string, AntigravityModelCatalog>()
+function catalogKey(token: string, project: string): string {
+  return `${createHash("sha256").update(token).digest("hex")}:${project}`
+}
 
 function modelIdFromName(model: GeminiApiModel): string | null {
   const raw = (model.name ? model.name.replace(/^models\//, "") : model.baseModelId)?.trim();
@@ -34,7 +40,14 @@ function modelIdFromName(model: GeminiApiModel): string | null {
  * Records a freshly-fetched public Gemini API model list. Called as a side
  * effect of the existing model-discovery fetch — no extra network round trip.
  */
-export function recordPublicGeminiApiModels(models: GeminiApiModel[]): void {
+export function recordPublicGeminiApiModels(models: GeminiApiModel[], apiKey?: string): void {
+  if (apiKey) {
+    for (const [key, entry] of publicCatalogsByKey) {
+      if (Date.now() - entry.fetchedAt > CATALOG_TTL_MS) publicCatalogsByKey.delete(key)
+    }
+    const ids = new Set(models.filter(supportsGeminiGeneration).flatMap(model => modelIdFromName(model) ?? []))
+    publicCatalogsByKey.set(catalogKey(apiKey, ""), { ids, fetchedAt: Date.now() })
+  }
   const ids = new Set<string>();
   for (const model of models) {
     const id = modelIdFromName(model);
@@ -55,37 +68,44 @@ export function getPublicGeminiApiModelIds(): ReadonlySet<string> | undefined {
   return catalog.ids;
 }
 
+export function getPublicGenerationModelIds(apiKey: string): ReadonlySet<string> | undefined {
+  const entry = publicCatalogsByKey.get(catalogKey(apiKey, ""))
+  return entry && Date.now() - entry.fetchedAt <= CATALOG_TTL_MS ? entry.ids : undefined
+}
+
 /**
  * Records available models from the Antigravity model registry (`fetchAvailableModels`).
  * Called as a side effect of quota checks and model discovery.
  */
-export function recordAntigravityAvailableModels(models: AntigravityAvailableModels): void {
-  if (!models || Object.keys(models).length === 0) return;
-  antigravityCatalog = {
+export function recordAntigravityAvailableModels(token: string, project: string, models: AntigravityAvailableModels): void {
+  for (const [key, entry] of antigravityCatalog) {
+    if (Date.now() - entry.fetchedAt > CATALOG_TTL_MS) antigravityCatalog.delete(key)
+  }
+  antigravityCatalog.set(catalogKey(token, project), {
     models: { ...models },
     fetchedAt: Date.now(),
-  };
+  })
 }
 
 /**
  * Returns the cached Antigravity available models, or `undefined` when no catalog
  * has been fetched yet or the cached one is stale.
  */
-export function getCachedAntigravityAvailableModels(): AntigravityAvailableModels | undefined {
-  if (!antigravityCatalog) return undefined;
-  if (Date.now() - antigravityCatalog.fetchedAt > CATALOG_TTL_MS) return undefined;
-  return antigravityCatalog.models;
+export function getCachedAntigravityAvailableModels(token: string, project: string): AntigravityAvailableModels | undefined {
+  const entry = antigravityCatalog.get(catalogKey(token, project))
+  return entry && Date.now() - entry.fetchedAt <= CATALOG_TTL_MS ? entry.models : undefined
 }
 
 export function resetPublicGeminiApiModelCatalogForTests(): void {
+  publicCatalogsByKey.clear()
   catalog = undefined;
 }
 
 export function resetAntigravityModelCatalogForTests(): void {
-  antigravityCatalog = undefined;
+  antigravityCatalog.clear()
 }
 
 export function resetModelCatalogsForTests(): void {
-  catalog = undefined;
-  antigravityCatalog = undefined;
+  resetPublicGeminiApiModelCatalogForTests()
+  antigravityCatalog.clear()
 }

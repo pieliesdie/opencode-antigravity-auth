@@ -26,6 +26,9 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
       "antigravity-gemini-3.5-flash-lite",
       "antigravity-gemini-3.8-flash",
       "antigravity-gemini-4-argon",
+      "antigravity-gemini-4-carbon",
+      "antigravity-gemini-4-hydrogen",
+      "antigravity-gemini-4-neon",
     ]);
   });
 

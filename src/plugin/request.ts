@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import { normalizeGeminiTools } from "./google-tools.ts"
+import { gemini4Model, neonWireTier, selectGemini4Route, Gemini4Unavailable, type Gemini4Route } from "./gemini4.ts"
+import { applySystemCompatibility } from "./opencode-system.ts"
 import {
   ANTIGRAVITY_ENDPOINT,
   EMPTY_SCHEMA_PLACEHOLDER_NAME,
@@ -524,11 +527,8 @@ function sanitizeRequestPayloadForAntigravity(
               }
 
               if (sig) {
-                return {
-                  ...part,
-                  thought_signature: sig,
-                  thoughtSignature: sig,
-                };
+                const { thought_signature: _legacy, ...rest } = part
+                return { ...rest, thoughtSignature: sig }
               }
 
               // If not the first part, just return the part without adding any signature keys
@@ -1032,7 +1032,10 @@ function ensureDefaultGemini3ThinkingLevel(
     thinkingConfig.thinkingLevel =
       thinkingLevel ?? getDefaultGemini3ThinkingLevel(effectiveModel);
   }
-  if (
+  if (effectiveModel === "gemini-4-hydrogen-sonar") {
+    const level = String(thinkingConfig.thinkingLevel).toUpperCase()
+    thinkingConfig.thinkingLevel = level === "MEDIUM" || level === "HIGH" ? level : "LOW"
+  } else if (
     /^gemini-4-argon-(?:low|medium|high)$/i.test(effectiveModel) &&
     thinkingConfig.thinkingLevel === "minimal"
   ) {
@@ -1116,6 +1119,8 @@ function requestInfoUrl(input: RequestInfo): string {
  * Options for request preparation.
  */
 export interface PrepareRequestOptions {
+  /** Enabled routes from this OAuth account/project's successful discovery. */
+  gemini4Routes?: Gemini4Route[]
   /** Enable Claude tool hardening (parameter signatures + system instruction). Default: true */
   claudeToolHardening?: boolean;
   /** Enable top-level Claude prompt auto-caching (`cache_control`). Default: false */
@@ -1314,6 +1319,30 @@ export function prepareAntigravityRequest(
   // Tier-based thinking configuration from model resolver (can be overridden by variant config)
   let tierThinkingBudget = resolved.thinkingBudget;
   let tierThinkingLevel = resolved.thinkingLevel;
+  const routes = options?.gemini4Routes
+  if (routes?.length && !gemini4Model(rawModel)?.level && !selectGemini4Route(routes, tierThinkingLevel)) {
+    tierThinkingLevel = routes[0]?.level ?? tierThinkingLevel
+  }
+  function registryBackend(requests: Array<Record<string, unknown>>) {
+    const neon = headerStyle === "antigravity" && gemini4Model(rawModel)?.model === "gemini-4-neon"
+      ? neonWireTier(tierThinkingLevel) : undefined
+    const route = routes && selectGemini4Route(routes, neon?.level ?? tierThinkingLevel?.toLowerCase())
+    if (routes && !route) throw new Gemini4Unavailable(`${rawModel} (${tierThinkingLevel}) is not listed for this Antigravity account/project.`)
+    for (const request of requests) {
+      const config = request.generationConfig
+      if (neon) {
+        const labels = request.labels
+        request.labels = { ...(labels && typeof labels === "object" ? labels : {}), model_enum: route?.modelEnum ?? neon.modelEnum }
+      }
+      if (config && typeof config === "object" && "thinkingConfig" in config) {
+        if (route?.supportsThinking === false) delete config.thinkingConfig
+        else if (neon && config.thinkingConfig && typeof config.thinkingConfig === "object") {
+          Object.assign(config.thinkingConfig, { thinkingLevel: neon.thinkingLevel })
+        }
+      }
+    }
+    return route?.backend ?? neon?.backend ?? effectiveModel
+  }
   let signatureSessionKey = buildSignatureSessionKey(
     PLUGIN_SESSION_ID,
     effectiveModel,
@@ -1422,6 +1451,10 @@ export function prepareAntigravityRequest(
         }
 
         for (const req of requestObjects) {
+          if (headerStyle === "antigravity") {
+            applySystemCompatibility(req)
+            if (!isClaude) normalizeGeminiTools(req.contents)
+          }
           // Use stable session ID for signature caching across multi-turn conversations
           (req as any).sessionId = signatureSessionKey;
           stripInjectedDebugFromRequestPayload(req as Record<string, unknown>);
@@ -1478,6 +1511,8 @@ export function prepareAntigravityRequest(
             hasToolUse && !hasSignedThinking && !hasCachedThinking;
         }
 
+        effectiveModel = registryBackend(requestObjects)
+        wrappedBody.model = effectiveModel
         body = JSON.stringify(wrappedBody);
       } else {
         const requestPayload: Record<string, unknown> = { ...parsedBody };
@@ -2226,6 +2261,11 @@ export function prepareAntigravityRequest(
         // Inject Antigravity system instruction with role "user" (CLIProxyAPI v6.6.89 compatibility)
         // This sets request.systemInstruction.role = "user" and request.systemInstruction.parts[0].text
         if (headerStyle === "antigravity") {
+          applySystemCompatibility(requestPayload)
+          if (!isClaude) normalizeGeminiTools(requestPayload.contents)
+          if (gemini4Model(effectiveModel)) {
+            ensureDefaultGemini3ThinkingLevel(requestPayload, effectiveModel, tierThinkingLevel)
+          }
           const existingSystemInstruction = requestPayload.systemInstruction;
           if (
             existingSystemInstruction &&
@@ -2284,6 +2324,8 @@ export function prepareAntigravityRequest(
           (wrappedBody.request as any).sessionId = signatureSessionKey;
         }
 
+        effectiveModel = registryBackend([requestPayload])
+        wrappedBody.model = effectiveModel
         body = JSON.stringify(wrappedBody);
       }
     } catch (error) {
@@ -2465,11 +2507,11 @@ export async function transformAntigravityResponse(
       : getKeepThinking()
         ? SYNTHETIC_THINKING_PLACEHOLDER
         : undefined;
-  const cacheSignatures = shouldCacheThinkingSignatures(effectiveModel)
+  const responseModel = gemini4Model(requestedModel)?.model ?? effectiveModel ?? requestedModel
+  const cacheSignatures = shouldCacheThinkingSignatures(responseModel)
 
   // Gemini models sometimes return double-encoded JSON in tool call args; Claude
   // models never do (and fixing them breaks string args like shell commands).
-  const responseModel = effectiveModel ?? requestedModel
   const repairToolArgs = !responseModel || isClaudeModel(responseModel)
   const transformParts = (body: unknown) => transformThinkingParts(body, { repairToolArgs })
 
@@ -2503,7 +2545,7 @@ export async function transformAntigravityResponse(
         debugText,
         cacheSignatures,
         displayedThinkingHashes:
-          effectiveModel && isGemini3Model(effectiveModel)
+          responseModel && isGemini3Model(responseModel)
             ? getDisplayedThinkingHashes(sessionId)
             : undefined,
         // injectSyntheticThinking removed - keep_thinking now unified with debug via debugText
@@ -2542,7 +2584,7 @@ export async function transformAntigravityResponse(
 
         // Rewrite Google's misleading IAM-permission error (returned when the
         // Gemini/Antigravity quota is exhausted) into a clear quota message.
-        const quotaMessage = rewriteQuotaExhaustedError(rawErrorMessage);
+        const quotaMessage = gemini4Model(requestedModel) ? null : rewriteQuotaExhaustedError(rawErrorMessage);
         const rewrittenErrorMessage = quotaMessage ?? rawErrorMessage;
 
         const errorType = detectErrorType(rewrittenErrorMessage);

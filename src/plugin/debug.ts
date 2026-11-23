@@ -397,19 +397,17 @@ export function logRateLimitEvent(
 
 export function logRateLimitSnapshot(
   family: string,
-  accounts: Array<{ index: number; email?: string; rateLimitResetTimes?: { claude?: number; gemini?: number } }>,
+  accounts: Array<{ index: number; email?: string; rateLimitResetTimes?: Record<string, number | undefined> }>,
 ): void {
   runWithDebugEnabled(() => {
     const now = Date.now();
     const entries = accounts.map((account) => {
       const label = formatAccountLabel(account.email, account.index);
-      const reset = account.rateLimitResetTimes?.[family as "claude" | "gemini"];
-      if (typeof reset !== "number") {
-        return `${label}=ready`;
-      }
-      const remaining = Math.max(0, reset - now);
-      const seconds = Math.ceil(remaining / 1000);
-      return `${label}=wait ${seconds}s`;
+      const base = family === "gemini" ? "gemini-antigravity" : family
+      const marks = Object.entries(account.rateLimitResetTimes ?? {}).flatMap(([key, reset]) =>
+        (key === base || key.startsWith(`${base}:`)) && reset !== undefined && reset > now
+          ? [`${key} ${Math.ceil((reset - now) / 1000)}s`] : [])
+      return `${label}=${marks.length ? marks.join(", ") : "ready"}`
     });
     logDebug(`[RateLimit] snapshot family=${family} ${entries.join(" | ")}`);
   });

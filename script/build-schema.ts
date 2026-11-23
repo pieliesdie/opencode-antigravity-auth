@@ -42,7 +42,7 @@ const optionDescriptions: Record<string, string> = {
   claude_prompt_auto_caching:
     "Enable Claude prompt auto-caching by adding top-level cache_control when absent.",
   proactive_token_refresh:
-    "Enable proactive background token refresh before expiry, ensuring requests never block.",
+    "Refresh idle accounts before expiry. Off by default; tokens are refreshed on demand.",
   proactive_refresh_buffer_seconds:
     "Seconds before token expiry to trigger proactive refresh.",
   proactive_refresh_check_interval_seconds:

@@ -8,6 +8,8 @@ import { ANTIGRAVITY_PROVIDER_ID } from "./constants.ts"
 import { createAntigravityPlugin } from "./plugin.ts"
 import { loadConfig } from "./plugin/config/index.ts"
 import { parseRefreshParts } from "./plugin/auth.ts"
+import { gemini4Model, missingGemini4Credential } from "./plugin/gemini4.ts"
+import { extractRequestedGeminiModel } from "./plugin/api-key.ts"
 import { createLogger } from "./plugin/logger.ts"
 import { writeConsoleLog } from "./plugin/logging-utils.ts"
 import type { OpencodeModelDefinition } from "./plugin/config/models.ts"
@@ -176,14 +178,21 @@ export const AntigravityV2Plugin = Plugin.define({
     })
 
     let sourceModels: Model.Info[] = []
+    let unavailable: ReadonlySet<string> = new Set()
+    const published = new Set<string>()
     const discoverModels = async () => {
-      const definitions = await legacy.provider?.models?.({ id: PROVIDER_ID }, { auth: await getAuth() }) ?? {}
+      let excluded: ReadonlySet<string> = new Set()
+      const definitions = await legacy.provider?.models?.({ id: PROVIDER_ID }, {
+        auth: await getAuth(), onUnavailable: (ids) => { excluded = ids },
+      }) ?? {}
       sourceModels = Object.entries(definitions).map(([id, definition]) => toModel(id, definition))
+      unavailable = excluded
     }
     await discoverModels()
     await ctx.provider.transform((editor) => {
       const existing = editor.get(PROVIDER_ID)
       if (!existing) {
+        for (const model of sourceModels) if (model.id.startsWith("antigravity-") || gemini4Model(model.id)) published.add(model.id)
         editor.add({
           info: {
             ...Provider.Info.empty(Provider.ID.make(PROVIDER_ID)),
@@ -202,8 +211,20 @@ export const AntigravityV2Plugin = Plugin.define({
         provider.activation = "enabled"
       })
       const models = new Map(existing.models)
+      const current = new Set(sourceModels.map((model) => String(model.id)))
+      for (const id of [...published, ...unavailable]) {
+        if (!current.has(id)) models.delete(Model.ID.make(id))
+      }
+      for (const id of published) if (!current.has(id)) published.delete(id)
       for (const model of sourceModels) {
-        if (!models.has(model.id)) models.set(model.id, model)
+        if (model.id.startsWith("antigravity-")) {
+          published.add(model.id)
+          const old = models.get(model.id)
+          models.set(model.id, old ? { ...old, variants: model.variants } : model)
+        } else if (!models.has(model.id) || published.has(model.id)) {
+          if (gemini4Model(model.id)) published.add(model.id)
+          models.set(model.id, model)
+        }
       }
       editor.models.set(PROVIDER_ID, [...models.values()])
     })
@@ -224,6 +245,10 @@ export const AntigravityV2Plugin = Plugin.define({
         const request = new Request(input, init)
         if (!isLoader(currentLoader)) {
           const auth = await getAuth()
+          const requested = gemini4Model(extractRequestedGeminiModel(request.url))
+          if (requested && auth.type !== "api" && event.options.apiKey === "antigravity-oauth") {
+            return missingGemini4Credential(requested.model)
+          }
           if (auth.type === "api" && typeof auth.key === "string") request.headers.set("x-goog-api-key", auth.key)
         }
         const fetchRequest = isLoader(currentLoader) ? currentLoader.fetch : globalThis.fetch

@@ -6,6 +6,7 @@
  */
 
 import type { ResolvedModel, ThinkingTier, GoogleSearchConfig } from "./types";
+import { gemini4Model } from "../gemini4.ts"
 
 
 /**
@@ -237,6 +238,10 @@ export function getDefaultGemini3ThinkingLevel(model: string): string {
 export function resolveModelWithTier(requestedModel: string): ResolvedModel {
   const isAntigravity = QUOTA_PREFIX_REGEX.test(requestedModel);
   const modelWithoutQuota = requestedModel.replace(QUOTA_PREFIX_REGEX, "");
+  const family = gemini4Model(modelWithoutQuota)
+  if (family?.level === "xhigh" && (family.model === "gemini-4-neon" || family.model === "gemini-4-hydrogen")) {
+    return { actualModel: family.model, thinkingLevel: "xhigh", isThinkingModel: true, quotaPreference: "antigravity", explicitQuota: isAntigravity }
+  }
 
   const tier = extractThinkingTierFromModel(modelWithoutQuota);
   const baseName = tier
@@ -269,6 +274,9 @@ export function resolveModelWithTier(requestedModel: string): ResolvedModel {
       if (String(effectiveTier) === "minimal") {
         effectiveTier = "low";
       }
+    } else if (family) {
+      antigravityModel = baseName
+      if (modelWithoutQuota.endsWith("-minimal")) effectiveTier = "low"
     } else if (isGemini3Flash && effectiveTier) {
       antigravityModel = baseName;
     }
@@ -304,7 +312,7 @@ export function resolveModelWithTier(requestedModel: string): ResolvedModel {
     if (isEffectiveGemini3) {
       return {
         actualModel: resolvedModel,
-        thinkingLevel: getDefaultGemini3ThinkingLevel(resolvedModel),
+        thinkingLevel: isAntigravity && family?.model === "gemini-4-neon" ? "high" : getDefaultGemini3ThinkingLevel(resolvedModel),
         isThinkingModel: true,
         quotaPreference,
         explicitQuota,
@@ -450,7 +458,7 @@ export function resolveModelForHeaderStyle(
     // API equivalent (`gemini-3.1-pro-preview`). Falls back to the bare stripped
     // name when no translation exists (covers `gemini-3.5-flash`, etc.).
     const transformedModel =
-      mapAntigravityModelToPublicApi(stripped) ?? stripped;
+      gemini4Model(modelWithTier)?.model ?? mapAntigravityModelToPublicApi(stripped) ?? stripped;
     return {
       ...resolveModelWithTier(modelWithTier),
       actualModel: transformedModel,

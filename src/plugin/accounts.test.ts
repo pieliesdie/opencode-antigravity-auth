@@ -1187,6 +1187,7 @@ describe("AccountManager", () => {
 
       it("falls back to message parsing when reason is absent", () => {
         expect(parseRateLimitReason(undefined, "Rate limit exceeded per minute")).toBe("RATE_LIMIT_EXCEEDED");
+        expect(parseRateLimitReason(undefined, "All Gemini API keys are temporarily rate-limited", 429)).toBe("RATE_LIMIT_EXCEEDED");
         expect(parseRateLimitReason(undefined, "Too many requests")).toBe("RATE_LIMIT_EXCEEDED");
         expect(parseRateLimitReason(undefined, "Quota exhausted for today")).toBe("QUOTA_EXHAUSTED");
       });

@@ -280,6 +280,11 @@ export async function executeSearch(
     thinking,
   });
 
+  const controller = new AbortController()
+  const onAbort = () => controller.abort(abortSignal?.reason)
+  if (abortSignal?.aborted) onAbort()
+  else abortSignal?.addEventListener("abort", onAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(new Error("Search timed out")), SEARCH_TIMEOUT_MS)
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -289,7 +294,7 @@ export async function executeSearch(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(wrappedBody),
-      signal: abortSignal ?? AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -306,8 +311,12 @@ export async function executeSearch(
     log.debug("Search response formatted", { resultLength: formatted.length });
     return formatted;
   } catch (error) {
+    abortSignal?.throwIfAborted()
     const message = error instanceof Error ? error.message : String(error);
     log.debug("Search execution error", { error: message });
     return `## Search Error\n\nFailed to execute search: ${message}. Please try again with a different query.`;
+  } finally {
+    clearTimeout(timer)
+    abortSignal?.removeEventListener("abort", onAbort)
   }
 }

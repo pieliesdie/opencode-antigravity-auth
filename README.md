@@ -134,12 +134,24 @@ opencode run "Hello" --model=google/antigravity-claude-opus-4-6-thinking --varia
 
 ### Model Reference
 
+**Gemini 4:** In OpenCode V2, select `google/antigravity-gemini-4-neon`, `google/antigravity-gemini-4-hydrogen`,
+`google/antigravity-gemini-4-carbon`, or `google/antigravity-gemini-4-argon`. OAuth uses the backend ID
+listed for the selected Antigravity account and project. If its catalog omits
+the model, the plugin can use a configured Gemini API key when API-key fallback
+is enabled. The OpenCode model list alone does not establish account access.
+Neon and Hydrogen support `low`, `medium`, `high`, and `xhigh`; Carbon and Argon
+support `low`, `medium`, and `high`. `antigravity-gemini-4-hydrogen-sonar` is a
+separate discovery-only OAuth model.
+
 **Antigravity quota** (default routing for Claude and Gemini):
 
 | Model | Variants | Notes |
 |-------|----------|-------|
 | `antigravity-gemini-3.8-flash` | low, medium, high | **Newest.** Gemini 3.8 Flash with thinking (medium default) |
-| `antigravity-gemini-4-argon` | low, medium, high | Google AI Ultra; 256K context, high default; minimal maps to low |
+| `antigravity-gemini-4-argon` | low, medium, high | 256K context, high default; minimal maps to low |
+| `antigravity-gemini-4-carbon` | low, medium, high | Gemini 4 Carbon |
+| `antigravity-gemini-4-hydrogen` | low, medium, high, xhigh | Gemini 4 Hydrogen |
+| `antigravity-gemini-4-neon` | low, medium, high, xhigh | Gemini 4 Neon |
 | `antigravity-gemini-3-flash` | minimal, low, medium, high | Gemini 3 Flash with thinking |
 | `antigravity-gemini-3.1-flash-lite` | minimal, low, medium, high | Gemini 3.1 Flash Lite with thinking |
 | `antigravity-gemini-3.5-flash-lite` | minimal, low, medium, high | Gemini 3.5 Flash Lite with thinking |
@@ -190,7 +202,7 @@ Add this to your `~/.config/opencode/opencode.json`:
           }
         },
         "antigravity-gemini-4-argon": {
-          "name": "Gemini 4 Argon (Antigravity, Ultra)",
+          "name": "Gemini 4 Argon (Antigravity)",
           "temperature": false,
           "limit": { "context": 262144, "output": 65536 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
@@ -198,6 +210,38 @@ Add this to your `~/.config/opencode/opencode.json`:
             "low": { "thinkingLevel": "low" },
             "medium": { "thinkingLevel": "medium" },
             "high": { "thinkingLevel": "high" }
+          }
+        },
+        "antigravity-gemini-4-carbon": {
+          "name": "Gemini 4 Carbon (Antigravity)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
+        "antigravity-gemini-4-hydrogen": {
+          "name": "Gemini 4 Hydrogen (Antigravity)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" },
+            "xhigh": { "thinkingLevel": "xhigh" }
+          }
+        },
+        "antigravity-gemini-4-neon": {
+          "name": "Gemini 4 Neon (Antigravity)",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" },
+            "xhigh": { "thinkingLevel": "xhigh" }
           }
         },
         "antigravity-gemini-3-flash": {
@@ -235,7 +279,6 @@ Add this to your `~/.config/opencode/opencode.json`:
             "low": { "thinkingConfig": { "thinkingBudget": 8192 } },
             "max": { "thinkingConfig": { "thinkingBudget": 32768 } }
           }
-        },
         }
       }
     }

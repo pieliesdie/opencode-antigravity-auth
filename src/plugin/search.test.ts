@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSearch } from "./search";
+import { SEARCH_TIMEOUT_MS } from "../constants.ts"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -125,6 +126,22 @@ describe("executeSearch", () => {
     expect(result).toContain("## Search Error");
     expect(result).toContain("Network down");
   });
+
+  it("keeps the timeout active alongside the caller's cancellation signal", async () => {
+    vi.useFakeTimers()
+    try {
+      const caller = new AbortController()
+      vi.stubGlobal("fetch", (_url: string, { signal }: { signal: AbortSignal }) =>
+        new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })))
+      const timed = executeSearch({ query: "slow" }, "token", "project", caller.signal)
+      await vi.advanceTimersByTimeAsync(SEARCH_TIMEOUT_MS)
+      expect(await timed).toContain("Search timed out")
+      const cancelled = executeSearch({ query: "cancel" }, "token", "project", caller.signal)
+      const reason = new Error("Esc")
+      caller.abort(reason)
+      await expect(cancelled).rejects.toBe(reason)
+    } finally { vi.useRealTimers() }
+  })
 
   it("includes Authorization header with the provided token", async () => {
     const spy = mockFetch(makeResponse("ok"));

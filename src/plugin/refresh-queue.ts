@@ -25,7 +25,7 @@ const log = createLogger("refresh-queue");
 
 /** Configuration for the proactive refresh queue */
 export interface ProactiveRefreshConfig {
-  /** Enable proactive token refresh (default: true) */
+  /** Enable proactive token refresh (default: false) */
   enabled: boolean;
   /** Seconds before expiry to trigger proactive refresh (default: 1800 = 30 minutes) */
   bufferSeconds: number;
@@ -34,7 +34,7 @@ export interface ProactiveRefreshConfig {
 }
 
 export const DEFAULT_PROACTIVE_REFRESH_CONFIG: ProactiveRefreshConfig = {
-  enabled: true,
+  enabled: false,
   bufferSeconds: 1800, // 30 minutes
   checkIntervalSeconds: 300, // 5 minutes
 };

@@ -65,6 +65,56 @@ describe("Gemini Flash-Lite routing", () => {
 });
 
 describe("createAntigravityPlugin provider models", () => {
+  it("starts two plugin instances without waiting for the shared version lookup", async () => {
+    let finish!: (response: Response) => void
+    const lookup = new Promise<Response>(resolve => { finish = resolve })
+    const network = vi.fn(() => lookup)
+    vi.stubGlobal("fetch", network)
+    try {
+      const context = { client, directory: process.cwd(), runtime: "v2" as const }
+      const instances = await Promise.all([createAntigravityPlugin("google")(context), createAntigravityPlugin("google")(context)])
+      expect(network).toHaveBeenCalledTimes(1)
+      for (const instance of instances) instance.dispose?.()
+    } finally { finish(new Response("1.0.0")); vi.unstubAllGlobals() }
+  })
+  it("scopes discovery fallback and empty results to the account and project", async () => {
+    const sonar = "gemini-4-hydrogen-sonar"
+    const flash = "gemini-3.8-flash"
+    let offline = false
+    let empty = false
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("fetchAvailableModels")) return new Response("1.0.0")
+      if (offline) throw new Error("offline")
+      const a = new Headers(init?.headers).get("authorization") === "Bearer A"
+      return Response.json({ models: empty ? {} : {
+        [sonar]: { disabled: !a }, [flash]: { displayName: "Flash", supportsThinking: a },
+      } })
+    })
+    try {
+      const plugin = await createAntigravityPlugin("google")({ client, directory: process.cwd() })
+      const discover = async (id: string, project = "project") => {
+        const result = await plugin.provider!.models!({ id: "google" }, { auth: {
+          type: "oauth", access: id, refresh: `${id}|${project}`, expires: Date.now() + 3_600_000,
+        } })
+        return { sonar: result[`antigravity-${sonar}`], flash: result[`antigravity-${flash}`] }
+      }
+      const a = await discover("A")
+      expect(Object.keys(a.sonar!.variants ?? {})).toEqual(["low", "medium", "high"])
+      const b = await discover("B")
+      expect(b.sonar).toBeUndefined()
+      expect(b.flash?.variants).toBeUndefined()
+      expect(b.flash?.capabilities).toMatchObject({ reasoning: false })
+      offline = true
+      expect(await discover("A")).toEqual(a)
+      expect(await discover("B")).toEqual(b)
+      expect((await discover("A", "other")).sonar).toBeUndefined()
+      offline = false
+      empty = true
+      expect(await discover("A")).toEqual({ sonar: undefined, flash: undefined })
+      offline = true
+      expect(await discover("A")).toEqual({ sonar: undefined, flash: undefined })
+    } finally { vi.unstubAllGlobals() }
+  })
   it("returns runtime-shaped discovered models with static fallback", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo) => {
       const url = String(input);
@@ -1161,7 +1211,81 @@ describe("createAntigravityPlugin capacity exhaustion (review fix 1)", () => {
   }
 
   it("capacity-exhausted both pools + RETRYABLE SDK 429 rotates to the healthy second account", async () => {
-    await runCapacitySdkRetryableRotation(429, "Resource has been exhausted");
+    await runCapacitySdkRetryableRotation(429, "Quota exceeded: requests per minute");
+  }, 20_000);
+
+  it("capacity-exhausted Neon + Gemini4CatalogResponse from API key rotates to the healthy second account", async () => {
+    process.env.OPENCODE_ANTIGRAVITY_API_KEYS = "test-no-neon-key";
+    const now = Date.now();
+    vi.mocked(storageModule.loadAccounts).mockResolvedValue({
+      version: 4,
+      accounts: [
+        { email: "a@example.com", refreshToken: "refresh-A", projectId: "proj", managedProjectId: "managed", addedAt: now, lastUsed: now, enabled: true },
+        { email: "b@example.com", refreshToken: "refresh-B", projectId: "proj", managedProjectId: "managed", addedAt: now, lastUsed: now, enabled: true },
+      ],
+      activeIndex: 0,
+    });
+
+    const authHeaders: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("oauth2.googleapis.com")) {
+        return new Response(
+          JSON.stringify({ access_token: "second-access", expires_in: 3600, token_type: "Bearer" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("fetchAvailableModels")) {
+        return Response.json({ models: { "gemini-4-neon-high": { model: "MODEL_PLACEHOLDER_M532" } } });
+      }
+      if (url.includes("generativelanguage.googleapis.com") && url.includes("models")) {
+        return Response.json({ models: [{ name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] }] });
+      }
+      if (url.includes("cloudcode-pa")) {
+        const auth = headerValue(input, init, "authorization") ?? "";
+        authHeaders.push(auth);
+        if (auth === "Bearer access-token") {
+          return new Response(
+            JSON.stringify({ error: { code: 503, message: "The model is overloaded. Please try again later.", status: "UNAVAILABLE" } }),
+            { status: 503, headers: { "content-type": "application/json" } },
+          );
+        }
+        return Response.json({
+          response: { candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" }] },
+        });
+      }
+      return new Response("1.2.3");
+    }));
+
+    const plugin = await createAntigravityPlugin("google")({ client, directory: process.cwd() });
+    const loader = await plugin.auth.loader(
+      async () => ({
+        type: "oauth" as const,
+        refresh: formatRefreshParts({ refreshToken: "refresh-A", projectId: "proj", managedProjectId: "managed" }),
+        access: "access-token",
+        expires: now + 3_600_000,
+      }),
+      { id: "google", api: "https://generativelanguage.googleapis.com/v1beta", npm: "@ai-sdk/google", models: {} },
+    );
+
+    vi.useFakeTimers();
+    try {
+      const fetchPromise = (loader as { fetch: typeof fetch }).fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-neon:generateContent",
+        { method: "POST", body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hello" }] }] }) },
+      );
+      let settled = false;
+      fetchPromise.then(() => { settled = true; }, () => { settled = true; });
+      for (let i = 0; i < 200 && !settled; i++) {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      const response = await fetchPromise;
+      expect(response.status).toBe(200);
+      expect(authHeaders).toContain("Bearer access-token");
+      expect(authHeaders).toContain("Bearer second-access");
+    } finally {
+      vi.useRealTimers();
+    }
   }, 20_000);
 
   it("capacity-exhausted both pools + transient SDK 500 rotates to the healthy second account", async () => {

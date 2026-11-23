@@ -1,6 +1,7 @@
 import type { ProviderModel } from "../types";
+import { gemini4Model, gemini4Routes, gemini4Levels, selectGemini4Route } from "../gemini4.ts"
 
-export type ModelThinkingLevel = "minimal" | "low" | "medium" | "high";
+export type ModelThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface ModelThinkingConfig {
   thinkingBudget: number;
@@ -45,6 +46,9 @@ export interface GeminiApiModel {
 export interface AntigravityAvailableModel {
   displayName?: string;
   modelName?: string;
+  model?: string
+  disabled?: boolean
+  supportsThinking?: boolean
 }
 
 export type AntigravityAvailableModels = Record<string, AntigravityAvailableModel>;
@@ -66,11 +70,11 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
-  // Google AI Ultra only. Antigravity serves it as gemini-4-argon-{low,medium,high}
+  // Antigravity serves Argon as gemini-4-argon-{low,medium,high}
   // (see resolveAntigravityGemini4ArgonBackendModel). Antigravity's default
   // context window for it is 256K tokens, smaller than the API's 1M.
   "antigravity-gemini-4-argon": {
-    name: "Gemini 4 Argon (Antigravity, Ultra)",
+    name: "Gemini 4 Argon (Antigravity)",
     temperature: false,
     limit: { context: 262144, output: 65536 },
     modalities: DEFAULT_MODALITIES,
@@ -80,6 +84,14 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
+  ...Object.fromEntries(
+    ["gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon"].map(id => [`antigravity-${id}`, {
+      name: `${titleFromModelId(id)} (Antigravity)`,
+      limit: defaultLimitForModel(id),
+      modalities: DEFAULT_MODALITIES,
+      variants: defaultVariantsForModel(id),
+    }]),
+  ),
   "antigravity-gemini-3-flash": {
     name: "Gemini 3 Flash (Antigravity)",
     limit: { context: 1048576, output: 65536 },
@@ -174,7 +186,7 @@ function modelIdFromGeminiName(name: string | undefined): string | null {
   return id || null;
 }
 
-function supportsGeminiGeneration(model: GeminiApiModel): boolean {
+export function supportsGeminiGeneration(model: GeminiApiModel): boolean {
   const methods = model.supportedGenerationMethods ?? [];
   return methods.includes("generateContent") || methods.includes("streamGenerateContent");
 }
@@ -196,6 +208,8 @@ function defaultLimitForModel(modelId: string): ModelLimit {
 
 function defaultVariantsForModel(modelId: string): Record<string, ModelVariant> | undefined {
   const normalized = modelId.toLowerCase().replace(/^antigravity-/, "");
+  const family = gemini4Model(normalized)
+  if (family) return Object.fromEntries(gemini4Levels(family.model).map(thinkingLevel => [thinkingLevel, { thinkingLevel }]))
   if (normalized.includes("claude") && normalized.includes("thinking")) {
     return {
       low: { thinkingConfig: { thinkingBudget: 8192 } },
@@ -237,7 +251,9 @@ function mergeWithStaticDefinition(
   };
 }
 
-function antigravityModelIdFromEntry(sourceId: string, entry: AntigravityAvailableModel): string | null {
+export function antigravityModelIdFromEntry(sourceId: string, entry: AntigravityAvailableModel): string | null {
+  const family = gemini4Model(sourceId) ?? gemini4Model(entry.modelName)
+  if (family) return `antigravity-${family.model}`
   const rawId = (entry.modelName || sourceId).trim();
   if (!rawId) return null;
   const modelId = rawId.replace(/^models\//, "");
@@ -251,6 +267,7 @@ export function modelsFromGeminiApi(models: GeminiApiModel[]): OpencodeModelDefi
     if (!supportsGeminiGeneration(model)) continue;
     const modelId = modelIdFromGeminiName(model.name) || model.baseModelId;
     if (!modelId) continue;
+    if (gemini4Model(modelId)?.model === "gemini-4-hydrogen-sonar") continue
 
     const variants = defaultVariantsForModel(modelId);
     const discovered: OpencodeModelDefinition = {
@@ -274,19 +291,43 @@ export function modelsFromAntigravityAvailableModels(
   const definitions: OpencodeModelDefinitions = {};
 
   for (const [sourceId, entry] of Object.entries(models)) {
+    if (entry.disabled) continue
     const modelId = antigravityModelIdFromEntry(sourceId, entry);
     if (!modelId) continue;
 
-    const variants = defaultVariantsForModel(modelId);
+    if (gemini4Model(modelId)) continue // Group tiered registry entries below.
+    if (!entry.displayName && !OPENCODE_MODEL_DEFINITIONS[modelId]) continue
+    const variants = defaultVariantsForModel(modelId)
     const discovered: OpencodeModelDefinition = {
-      name: entry.displayName ? `${entry.displayName} (Antigravity)` : `${titleFromModelId(modelId)} (Antigravity)`,
+      name: `${entry.displayName ?? titleFromModelId(modelId.replace(/^antigravity-/, ""))} (Antigravity)`,
       limit: defaultLimitForModel(modelId),
       modalities: DEFAULT_MODALITIES,
       ...(variants ? { variants } : {}),
     };
     definitions[modelId] = mergeWithStaticDefinition(modelId, discovered);
+    if (entry.supportsThinking === false) {
+      definitions[modelId].variants = undefined
+      definitions[modelId].supportsThinking = false
+    }
   }
 
+  for (const [model, routes] of gemini4Routes(models)) {
+    if (!routes.length) continue
+    const id = `antigravity-${model}`
+    const levels = gemini4Levels(model).filter(level => {
+      const route = selectGemini4Route(routes, level)
+      return route && route.supportsThinking !== false
+    })
+    definitions[id] = {
+      name: `${routes[0]?.displayName ?? titleFromModelId(model)} (Antigravity)`,
+      limit: OPENCODE_MODEL_DEFINITIONS[id]?.limit ?? defaultLimitForModel(model),
+      modalities: DEFAULT_MODALITIES,
+      ...(model === "gemini-4-hydrogen-sonar" || model === "gemini-4-argon" ? { temperature: false } : {}),
+      ...(levels.length
+        ? { variants: Object.fromEntries(levels.map(thinkingLevel => [thinkingLevel, { thinkingLevel }])) }
+        : { variants: undefined, supportsThinking: false }),
+    }
+  }
   return definitions;
 }
 

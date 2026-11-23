@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ProactiveRefreshQueue } from "./refresh-queue";
+import { DEFAULT_PROACTIVE_REFRESH_CONFIG, ProactiveRefreshQueue } from "./refresh-queue";
 import { AccountManager } from "./accounts";
 import type { AccountStorageV4 } from "./storage";
 import type { OAuthAuthDetails, PluginClient } from "./types";
@@ -370,6 +370,15 @@ describe("ProactiveRefreshQueue", () => {
       await runRefreshCheck();
       expect(failureTracking.has("r1")).toBe(false);
       expect(failureTracking.has("r2")).toBe(true);
+    });
+  });
+
+  describe("default configuration", () => {
+    it("disables proactive refresh by default", () => {
+      expect(DEFAULT_PROACTIVE_REFRESH_CONFIG.enabled).toBe(false);
+      const queue = new ProactiveRefreshQueue(mockClient, "test-provider");
+      queue.start();
+      expect(queue.isRunning()).toBe(false);
     });
   });
 });

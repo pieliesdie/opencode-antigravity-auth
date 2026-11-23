@@ -45,6 +45,8 @@ export interface FetchAvailableModelsResponse {
 }
 
 export interface FetchAvailableModelEntry {
+  disabled?: boolean
+  supportsThinking?: boolean
   quotaInfo?: {
     remainingFraction?: number;
     resetTime?: string;
@@ -316,7 +318,7 @@ async function checkSingleAccountQuota(
         error: "Failed to fetch Antigravity quota",
       };
     } else {
-      recordAntigravityAvailableModels(antigravityResponse.models);
+      recordAntigravityAvailableModels(parseRefreshParts(auth.refresh).refreshToken, projectContext.effectiveProjectId, antigravityResponse.models)
       quotaResult = aggregateQuota(antigravityResponse.models);
     }
 

@@ -3,7 +3,7 @@
 import { createInterface } from "node:readline/promises"
 import { stdin, stdout } from "node:process"
 import { pathToFileURL } from "node:url"
-import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth.ts"
+import { authorizeAntigravity, cancelAuthorization, exchangeAntigravity } from "./antigravity/oauth.ts"
 import { startOAuthListener } from "./plugin/server.ts"
 import { loadAccounts, saveAccounts } from "./plugin/storage.ts"
 import { parseRefreshParts } from "./plugin/auth.ts"
@@ -16,8 +16,10 @@ const client = { app: { log: async () => undefined } } as unknown as PluginClien
 
 async function login(manual: boolean): Promise<{ refresh: string; email?: string; projectId?: string; managedProjectId?: string }> {
   const listener = manual ? undefined : await startOAuthListener()
+  let expectedState = ""
   try {
     const authorization = await authorizeAntigravity()
+    expectedState = new URL(authorization.url).searchParams.get("state") ?? ""
     stdout.write(`Open this URL to sign in:\n${authorization.url}\n`)
     let code: string
     let state: string
@@ -32,15 +34,15 @@ async function login(manual: boolean): Promise<{ refresh: string; email?: string
         const value = await rl.question("Paste the full redirect URL (or code): ")
         const callback = value.startsWith("http") ? new URL(value) : undefined
         code = callback?.searchParams.get("code") ?? value.trim()
-        state = callback?.searchParams.get("state") ?? new URL(authorization.url).searchParams.get("state") ?? ""
+        state = callback ? callback.searchParams.get("state") ?? "" : expectedState
       } finally { rl.close() }
     }
-    if (!code || state !== new URL(authorization.url).searchParams.get("state")) throw new Error("Invalid OAuth redirect or state")
-    const result = await exchangeAntigravity(code, state)
+    if (!code || !expectedState || state !== expectedState) throw new Error("Invalid OAuth redirect or state")
+    const result = await exchangeAntigravity(code, state, expectedState)
     if (result.type !== "success") throw new Error(result.error)
     const parts = parseRefreshParts(result.refresh)
     return { refresh: parts.refreshToken, email: result.email, projectId: parts.projectId, managedProjectId: parts.managedProjectId }
-  } finally { await listener?.close() }
+  } finally { cancelAuthorization(expectedState); await listener?.close() }
 }
 
 export async function runAccountsCLI(args: string[], out: (text: string) => void = console.log): Promise<void> {

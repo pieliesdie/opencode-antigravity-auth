@@ -8,7 +8,7 @@ import {
   getAntigravityHeaders,
   type HeaderStyle,
 } from "./constants";
-import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth";
+import { authorizeAntigravity, cancelAuthorization, exchangeAntigravity } from "./antigravity/oauth";
 import type { AntigravityTokenExchangeResult } from "./antigravity/oauth";
 import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "./plugin/auth";
 import { pressEnterToContinue, promptAddAnotherAccount, promptLoginMode, promptProjectId, type LoginMenuResult } from "./plugin/cli";
@@ -53,6 +53,7 @@ import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "./plugi
 import { initLogger, createLogger } from "./plugin/logger";
 import { initHealthTracker, getHealthTracker, initTokenTracker, getTokenTracker } from "./plugin/rotation";
 import { initAntigravityVersion } from "./plugin/version";
+import { retryAfterMs } from "./plugin/retry-after.ts"
 import { executeSearch } from "./plugin/search";
 import {
   createAntigravityOnlyModelErrorResponse,
@@ -64,10 +65,13 @@ import {
   isAntigravityOnlyGenerativeLanguageRequest,
   isApiKeyAuth,
   isRetryableAgySdkCredentialStatus,
+  markAgySdkCredentialRateLimited,
   selectAgySdkCredential,
 } from "./plugin/api-key";
 import {
   OPENCODE_MODEL_DEFINITIONS,
+  antigravityModelIdFromEntry,
+  type AntigravityAvailableModels,
   mergeModelDefinitions,
   modelsFromAntigravityAvailableModels,
   modelsFromGeminiApi,
@@ -78,6 +82,8 @@ import {
   recordPublicGeminiApiModels,
 } from "./plugin/model-catalog";
 import type { AgySdkCredential } from "./plugin/api-key";
+import { GEMINI4_MODELS, Gemini4CatalogResponse, Gemini4Unavailable, gemini4Model, gemini4Routes, missingGemini4Credential, type Gemini4Route } from "./plugin/gemini4.ts"
+import { getPublicGenerationModelIds } from "./plugin/model-catalog.ts"
 import type {
   AuthDetails,
   GetAuth,
@@ -170,12 +176,17 @@ async function tryFetchWithAgySdkCredentials(
   init: RequestInit | undefined,
   credentials: AgySdkCredential[],
   fallbackRetryAfterMs: number,
+  discoverPublic = true,
 ): Promise<Response | null> {
   if (credentials.length === 0) return null;
   const attempted = new Set<string>();
   let lastResponse: Response | null = null;
+  const family = gemini4Model(extractRequestedGeminiModel(toUrlString(input)))
+  let omitted = 0
 
   while (attempted.size < credentials.length) {
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
+    signal?.throwIfAborted()
     const credential = selectAgySdkCredential(
       credentials.filter((candidate) => !attempted.has(candidate.apiKey)),
     );
@@ -183,13 +194,35 @@ async function tryFetchWithAgySdkCredentials(
       break;
     }
     attempted.add(credential.apiKey);
-    const response = await fetchWithAgySdkCredential(input, init, credential, fallbackRetryAfterMs);
-    if (!isRetryableAgySdkCredentialStatus(response.status)) {
+    if (family && discoverPublic) {
+      let ids = getPublicGenerationModelIds(credential.apiKey)
+      if (!ids) {
+        try {
+          const list = await waitForShared(fetchGeminiApiModels(credential), signal)
+          recordPublicGeminiApiModels(list, credential.apiKey)
+          ids = getPublicGenerationModelIds(credential.apiKey)
+        } catch (error) {
+          signal?.throwIfAborted()
+          log.debug("gemini4-public-discovery-failed", { error: String(error) })
+        }
+      }
+      if (ids && !ids.has(family.model)) { omitted++; continue }
+    }
+    const response = await fetchWithAgySdkCredential(input, init, credential);
+    signal?.throwIfAborted()
+    if (!await shouldRetrySdkResponse(response)) {
       return response;
+    }
+    if ([429, 503, 529].includes(response.status)) {
+      const { explicitDelay } = await getRetryEvidence(response)
+      markAgySdkCredentialRateLimited(credential, explicitDelay ?? fallbackRetryAfterMs)
     }
     lastResponse = response;
   }
 
+  if (!lastResponse && family && omitted === credentials.length) {
+    return new Gemini4CatalogResponse(`${family.model} is not listed for generation by the configured Gemini API key(s).`)
+  }
   return lastResponse ?? new Response(
     JSON.stringify({ error: { message: "All Gemini API keys are temporarily rate-limited" } }),
     {
@@ -211,7 +244,7 @@ async function modelsFromAgySdkCredentials(
   for (const credential of credentials) {
     try {
       const models = await fetchGeminiApiModels(credential);
-      recordPublicGeminiApiModels(models);
+      recordPublicGeminiApiModels(models, credential.apiKey);
       return modelsFromGeminiApi(models);
     } catch (error) {
       errors.push(error);
@@ -229,8 +262,8 @@ async function modelsFromOAuthAuth(
   auth: AuthDetails | undefined,
   client: PluginClient,
   providerId: string,
-): Promise<Record<string, ProviderModel>> {
-  if (!config.model_discovery.enabled || !config.model_discovery.antigravity) return {};
+): Promise<AntigravityAvailableModels | undefined> {
+  if (!config.model_discovery.enabled || !config.model_discovery.antigravity) return undefined
 
   let effectiveAuth = auth && isOAuthAuth(auth) ? auth : undefined;
   if (!effectiveAuth && activeAccountManager) {
@@ -246,42 +279,25 @@ async function modelsFromOAuthAuth(
     }
   }
 
-  if (!effectiveAuth) {
-    const cached = getCachedAntigravityAvailableModels();
-    if (cached) {
-      return modelsFromAntigravityAvailableModels(cached);
-    }
-    return {};
-  }
-
-  let accessToken = effectiveAuth.access;
-  if (!accessToken || accessTokenExpired(effectiveAuth)) {
-    const refreshed = await refreshAccessToken(effectiveAuth, client, providerId);
-    accessToken = refreshed?.access;
-  }
-  if (!accessToken) {
-    const cached = getCachedAntigravityAvailableModels();
-    if (cached) {
-      return modelsFromAntigravityAvailableModels(cached);
-    }
-    return {};
-  }
-
-  const parts = parseRefreshParts(effectiveAuth.refresh);
+  if (!effectiveAuth) return undefined
+  let parts = parseRefreshParts(effectiveAuth.refresh);
   const projectId = parts.managedProjectId || parts.projectId || ANTIGRAVITY_DEFAULT_PROJECT_ID;
   try {
+    if (accessTokenExpired(effectiveAuth)) {
+      const refreshed = await refreshAccessToken(effectiveAuth, client, providerId)
+      if (refreshed) { effectiveAuth = refreshed; parts = parseRefreshParts(refreshed.refresh) }
+    }
+    const accessToken = effectiveAuth.access
+    if (!accessToken || accessTokenExpired(effectiveAuth)) return getCachedAntigravityAvailableModels(parts.refreshToken, projectId)
     const response = await fetchAvailableModels(accessToken, projectId);
     if (response.models) {
-      recordAntigravityAvailableModels(response.models);
+      recordAntigravityAvailableModels(parts.refreshToken, projectId, response.models)
     }
-    return modelsFromAntigravityAvailableModels(response.models ?? {});
+    return response.models ?? getCachedAntigravityAvailableModels(parts.refreshToken, projectId)
   } catch (error) {
     log.debug("fetchAvailableModels-failed", { error: String(error) });
-    const cached = getCachedAntigravityAvailableModels();
-    if (cached) {
-      return modelsFromAntigravityAvailableModels(cached);
-    }
-    return {};
+    if (error instanceof AntigravityTokenRefreshError && error.code === "invalid_grant") return undefined
+    return getCachedAntigravityAvailableModels(parts.refreshToken, projectId)
   }
 }
 
@@ -304,7 +320,7 @@ function modalitiesToCapabilities(model: ProviderModel, existing: ProviderModel 
 
   return {
     temperature: model.temperature ?? existingCapabilities?.temperature ?? true,
-    reasoning: existingCapabilities?.reasoning ?? !!model.variants,
+    reasoning: model.supportsThinking === false ? false : existingCapabilities?.reasoning ?? !!model.variants,
     attachment: existingCapabilities?.attachment ?? (input.includes("image") || input.includes("pdf")),
     toolcall: existingCapabilities?.toolcall ?? true,
     input: {
@@ -389,6 +405,7 @@ async function tryAgySdkFallbackForRequest(
   config: AntigravityConfig,
   credentials: AgySdkCredential[],
   urlString: string,
+  includeCatalogMiss = false,
 ): Promise<Response | null> {
   if (!config.agy_sdk.api_key_fallback || credentials.length === 0 || !isAgySdkSupportedRequest(urlString)) {
     return null;
@@ -404,12 +421,14 @@ async function tryAgySdkFallbackForRequest(
     });
     return null;
   }
-  return tryFetchWithAgySdkCredentials(
+  const response = await tryFetchWithAgySdkCredentials(
     input,
     init,
     credentials,
     defaultRetryMsForConfig(config),
-  );
+    config.model_discovery.enabled && config.model_discovery.gemini_api,
+  )
+  return !includeCatalogMiss && response instanceof Gemini4CatalogResponse ? null : response
 }
 
 async function triggerAsyncQuotaRefreshForAccount(
@@ -1024,7 +1043,7 @@ function parseOAuthCallbackInput(
   try {
     const url = new URL(trimmed);
     const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state") ?? fallbackState;
+    const state = url.searchParams.get("state");
 
     if (!code) {
       return { error: "Missing code in callback URL" };
@@ -1058,7 +1077,7 @@ async function promptManualOAuthInput(
     return { type: "failed", error: params.error };
   }
 
-  return exchangeAntigravity(params.code, params.state);
+  return exchangeAntigravity(params.code, params.state, fallbackState);
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -1194,26 +1213,6 @@ function buildAuthSuccessFromStoredAccount(account: {
   };
 }
 
-function retryAfterMsFromResponse(response: Response, defaultRetryMs: number = 60_000): number {
-  const retryAfterMsHeader = response.headers.get("retry-after-ms");
-  if (retryAfterMsHeader) {
-    const parsed = Number.parseInt(retryAfterMsHeader, 10);
-    if (!Number.isNaN(parsed) && parsed > 0) {
-      return parsed;
-    }
-  }
-
-  const retryAfterHeader = response.headers.get("retry-after");
-  if (retryAfterHeader) {
-    const parsed = Number.parseInt(retryAfterHeader, 10);
-    if (!Number.isNaN(parsed) && parsed > 0) {
-      return parsed * 1000;
-    }
-  }
-
-  return defaultRetryMs;
-}
-
 /**
  * Parse Go-style duration strings to milliseconds.
  * Supports compound durations: "1h16m0.667s", "1.5s", "200ms", "5m30s"
@@ -1270,9 +1269,8 @@ function extractRateLimitBodyInfo(body: unknown): RateLimitBodyInfo {
   }
 
   const error = (body as { error?: unknown }).error;
-  const message = error && typeof error === "object" 
-    ? (error as { message?: string }).message 
-    : undefined;
+  const rawMessage = error && typeof error === "object" && "message" in error ? error.message : undefined
+  const message = typeof rawMessage === "string" ? rawMessage : undefined
 
   const details = error && typeof error === "object" 
     ? (error as { details?: unknown[] }).details 
@@ -1283,6 +1281,10 @@ function extractRateLimitBodyInfo(body: unknown): RateLimitBodyInfo {
     for (const detail of details) {
       if (!detail || typeof detail !== "object") continue;
       const type = (detail as { "@type"?: string })["@type"];
+      if (type === "type.googleapis.com/google.rpc.QuotaFailure" && "violations" in detail &&
+          Array.isArray(detail.violations) && detail.violations.length) {
+        reason ??= "QUOTA_EXHAUSTED"
+      }
       if (typeof type === "string" && type.includes("google.rpc.ErrorInfo")) {
         const detailReason = (detail as { reason?: string }).reason;
         if (typeof detailReason === "string") {
@@ -1318,6 +1320,9 @@ function extractRateLimitBodyInfo(body: unknown): RateLimitBodyInfo {
             return { retryDelayMs: quotaResetDelayMs, message, quotaResetTime, reason };
           }
         }
+        if (typeof quotaResetTime === "string" && Number.isFinite(Date.parse(quotaResetTime))) {
+          return { retryDelayMs: Math.max(0, Date.parse(quotaResetTime) - Date.now()), message, quotaResetTime, reason }
+        }
       }
     }
   }
@@ -1348,6 +1353,26 @@ async function extractRetryInfoFromBody(response: Response): Promise<RateLimitBo
   } catch {
     return { retryDelayMs: null };
   }
+}
+
+async function readRetryEvidence(response: Response) {
+  const bodyInfo = await extractRetryInfoFromBody(response)
+  const header = retryAfterMs(response.headers)
+  const explicitDelay = header === undefined ? bodyInfo.retryDelayMs : Math.max(header, bodyInfo.retryDelayMs ?? 0)
+  const reason = parseRateLimitReason(bodyInfo.reason, bodyInfo.message, response.status)
+  return { bodyInfo, explicitDelay, reason, unknown429: response.status === 429 && reason === "UNKNOWN" && explicitDelay === null }
+}
+
+const retryEvidence = new WeakMap<Response, ReturnType<typeof readRetryEvidence>>()
+function getRetryEvidence(response: Response) {
+  const evidence = retryEvidence.get(response) ?? readRetryEvidence(response)
+  retryEvidence.set(response, evidence)
+  return evidence
+}
+
+async function shouldRetrySdkResponse(response: Response): Promise<boolean> {
+  return isRetryableAgySdkCredentialStatus(response.status) &&
+    !(response.status === 429 && (await getRetryEvidence(response)).unknown429)
 }
 
 function formatWaitTime(ms: number): string {
@@ -1639,9 +1664,22 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   });
 }
 
+/** Cancel this waiter, not another request's shared token/project lookup. */
+function waitForShared<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return task
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    if (signal.aborted) abort()
+    else signal.addEventListener("abort", abort, { once: true })
+    task.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
+  })
+}
+
 /**
  * Creates an Antigravity OAuth plugin for a specific provider ID.
  */
+let versionCheck: Promise<void> | undefined
+
 export const createAntigravityPlugin = (providerId: string) => async (
   { client, directory, runtime = "v1" }: PluginContext,
 ): Promise<PluginResult> => {
@@ -1653,6 +1691,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
   let cachedGetAuth: GetAuth | null = null;
   const refreshQueues = new Set<ProactiveRefreshQueue>();
   const oauthListeners = new Set<OAuthListener>();
+  const loginLifetime = new AbortController()
   
   // Initialize debug with config
   initializeDebug(config);
@@ -1661,7 +1700,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
   initLogger(client);
   
   // Fetch latest Antigravity version from remote API (non-blocking, falls back to hardcoded)
-  await initAntigravityVersion();
+  versionCheck ??= initAntigravityVersion().catch((error: unknown) => {
+    log.debug("version-check-failed", { error: String(error) })
+  })
   
   // Initialize health tracker for hybrid strategy
   if (config.health_score) {
@@ -1820,6 +1861,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
   return {
     dispose: () => {
+      loginLifetime.abort()
       updateChecker.dispose();
       for (const queue of refreshQueues) queue.stop();
       refreshQueues.clear();
@@ -1848,7 +1890,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
         let auth: AuthDetails | undefined;
         try {
-          auth = cachedGetAuth ? await cachedGetAuth() : context.auth;
+          auth = context.auth ?? (cachedGetAuth ? await cachedGetAuth() : undefined);
         } catch (error) {
           log.debug("model-discovery-fallback", { error: error instanceof Error ? error.message : String(error) });
           return fallbackModels;
@@ -1859,7 +1901,36 @@ export const createAntigravityPlugin = (providerId: string) => async (
         ]);
 
         const geminiModels = geminiResult.status === "fulfilled" ? geminiResult.value : {};
-        const antigravityModels = antigravityResult.status === "fulfilled" ? antigravityResult.value : {};
+        const registry = antigravityResult.status === "fulfilled" ? antigravityResult.value : undefined
+        const antigravityModels = modelsFromAntigravityAvailableModels(registry ?? {})
+        const unavailable = new Set<string>()
+        if (registry) {
+          for (const model of GEMINI4_MODELS) {
+            const id = `antigravity-${model}`
+            if (model === "gemini-4-neon") {
+              // Live (2026-11-23): Google served Neon to the official client
+              // while its catalog omitted it entirely. An omission inside a
+              // nonempty catalog is therefore not proof of unavailability,
+              // but a listed group with every tier disabled is.
+              const neonRoutes = gemini4Routes(registry).get("gemini-4-neon")
+              if (neonRoutes && !neonRoutes.length) unavailable.add(id)
+              continue
+            }
+            if (!(id in antigravityModels)) unavailable.add(id)
+          }
+          // A nonempty registry can list only backend tier IDs, not the
+          // curated aliases. Absence is not an explicit disabled flag.
+          if (!Object.keys(registry).length) {
+            for (const id of Object.keys(OPENCODE_MODEL_DEFINITIONS)) {
+              if (id.startsWith("antigravity-")) unavailable.add(id)
+            }
+          }
+          for (const [sourceId, entry] of Object.entries(registry)) {
+            const id = antigravityModelIdFromEntry(sourceId, entry)
+            if (id && entry.disabled && !(id in antigravityModels)) unavailable.add(id)
+          }
+        }
+        context.onUnavailable?.(unavailable)
         if (geminiResult.status === "rejected" || antigravityResult.status === "rejected") {
           log.debug("model-discovery-partial-fallback", {
             geminiError: geminiResult.status === "rejected" ? String(geminiResult.reason) : undefined,
@@ -1867,10 +1938,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
           });
         }
 
+        const definitions = mergeModelDefinitions(fallbackModels, geminiModels, antigravityModels)
+        for (const id of unavailable) delete definitions[id]
         return normalizeProviderHookModels(
           providerId,
           provider,
-          mergeModelDefinitions(fallbackModels, geminiModels, antigravityModels),
+          definitions,
           fallbackModels,
         );
       },
@@ -1961,6 +2034,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               init,
               latestCredentials,
               (config.default_retry_after_seconds ?? 60) * 1000,
+              config.model_discovery.enabled && config.model_discovery.gemini_api,
             );
             if (response) return response;
             return fetch(input, init);
@@ -2058,8 +2132,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 init,
                 latestCredentials,
                 (config.default_retry_after_seconds ?? 60) * 1000,
+                config.model_discovery.enabled && config.model_discovery.gemini_api,
               );
               if (response) return response;
+              const family = gemini4Model(extractRequestedGeminiModel(urlString))
+              if (family) return missingGemini4Credential(family.model)
             }
             return fetch(input, init);
           }
@@ -2068,6 +2145,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           const urlString = toUrlString(input);
           const family = getModelFamilyFromUrl(urlString);
           const model = extractModelFromUrl(urlString);
+          const gemini4 = gemini4Model(model)
           const agySdkCredentials = getAgySdkCredentials(config, apiKeyAuth);
           const debugLines: string[] = [];
           const pushDebug = (line: string) => {
@@ -2092,7 +2170,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
           let lastFailure: FailureContext | null = null;
           let lastError: Error | null = null;
-          const abortSignal = init?.signal ?? undefined;
+          const abortSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
           // Accounts already tried (and switched away from) within THIS request.
           // Excluded from re-selection so each "switch account" makes forward
           // progress instead of re-picking the same account forever. Cleared
@@ -2176,7 +2254,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
             if (
               family === "gemini" &&
-              config.agy_sdk.prefer_for_gemini &&
+               (config.agy_sdk.prefer_for_gemini || (gemini4 && apiKeyAuth)) &&
               !explicitQuota &&
               agySdkCredentials.length > 0 &&
               isAgySdkSupportedRequest(urlString)
@@ -2186,8 +2264,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 init,
                 agySdkCredentials,
                 (config.default_retry_after_seconds ?? 60) * 1000,
+                config.model_discovery.enabled && config.model_discovery.gemini_api,
               );
-              if (response && !isRetryableAgySdkCredentialStatus(response.status)) {
+              if (response && !(response instanceof Gemini4CatalogResponse) && !await shouldRetrySdkResponse(response)) {
                 return response;
               }
             }
@@ -2381,7 +2460,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
             if (accessTokenExpired(authRecord)) {
               try {
-                const refreshed = await refreshAccessToken(authRecord, client, providerId);
+                const refreshed = await waitForShared(refreshAccessToken(authRecord, client, providerId), abortSignal);
                 if (!refreshed) {
                   const { failures, shouldCooldown, cooldownMs } = trackAccountFailure(account.index);
                   getHealthTracker().recordFailure(account.index);
@@ -2402,6 +2481,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   log.error("Failed to persist refreshed auth", { error: String(error) });
                 }
               } catch (error) {
+                checkAborted()
                 if (error instanceof AntigravityTokenRefreshError && error.code === "invalid_grant") {
                   // Capture the index BEFORE removal — removeAccount renumbers all
                   // subsequent accounts, so index-keyed state must be remapped to match.
@@ -2463,6 +2543,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   continue;
                 }
 
+                // Network failures do not invalidate credentials or model quota.
+                if (!(error instanceof AntigravityTokenRefreshError)) throw error
                 const { failures, shouldCooldown, cooldownMs } = trackAccountFailure(account.index);
                 getHealthTracker().recordFailure(account.index);
                 lastError = error instanceof Error ? error : new Error(String(error));
@@ -2486,9 +2568,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
             let projectContext: ProjectContextResult;
             try {
-              projectContext = await ensureProjectContext(authRecord);
+              projectContext = await waitForShared(ensureProjectContext(authRecord), abortSignal);
               resetAccountFailureState(account.index);
             } catch (error) {
+              checkAborted()
               const { failures, shouldCooldown, cooldownMs } = trackAccountFailure(account.index);
               getHealthTracker().recordFailure(account.index);
               lastError = error instanceof Error ? error : new Error(String(error));
@@ -2508,6 +2591,41 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 await accountManager.saveToDisk();
               } catch (error) {
                 log.error("Failed to persist project context", { error: String(error) });
+              }
+            }
+
+            let discoveredRoutes: Gemini4Route[] | undefined
+            if (gemini4 && config.model_discovery.enabled && config.model_discovery.antigravity) {
+              const token = parseRefreshParts(projectContext.auth.refresh).refreshToken
+              const project = projectContext.effectiveProjectId
+              let registry = getCachedAntigravityAvailableModels(token, project)
+              if (!registry) {
+                try {
+                  registry = (await waitForShared(fetchAvailableModels(accessToken, project), abortSignal)).models
+                  if (registry) recordAntigravityAvailableModels(token, project, registry)
+                } catch (error) {
+                  checkAborted()
+                  log.debug("gemini4-oauth-discovery-failed", { error: String(error) })
+                }
+              }
+              if (registry) {
+                discoveredRoutes = gemini4Routes(registry).get(gemini4.model)
+                // Live (2026-11-23): Google served Neon to the official client
+                // while its catalog omitted it entirely. An omission inside a
+                // nonempty catalog is therefore not proof of unavailability for
+                // Neon: proceed to generation and let Google decide. A
+                // present-but-empty (disabled) group, an empty catalog, or an
+                // omission of another Gemini 4 model stays fatal here.
+                const neonCatalogOmission = gemini4.model === "gemini-4-neon" &&
+                  discoveredRoutes === undefined && Object.keys(registry).length > 0
+                if (!discoveredRoutes?.length && !neonCatalogOmission) {
+                  const fallback = await tryAgySdkFallbackForRequest(input, init, config, agySdkCredentials, urlString, true)
+                  if (fallback && !(fallback instanceof Gemini4CatalogResponse)) return fallback
+                  return new Gemini4CatalogResponse(`${gemini4.model} is not listed as enabled for the current Antigravity account/project. ` +
+                    (fallback ? "The configured Gemini API keys also do not list it." :
+                      gemini4.model.endsWith("-sonar") ? "Sonar requires Antigravity OAuth." :
+                        "Select an account that lists it, or configure a Gemini API key with access."))
+                }
               }
             }
 
@@ -2613,6 +2731,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
               }
 
               const currentEndpoint = ANTIGRAVITY_ENDPOINT_FALLBACKS[i];
+              let dispatched = false
+              let responseStatus: number | undefined
 
               try {
                 const prepared = await prepareAntigravityRequest(
@@ -2627,6 +2747,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     claudeToolHardening: config.claude_tool_hardening,
                     claudePromptAutoCaching: config.claude_prompt_auto_caching,
                     fingerprint: account.fingerprint,
+                    gemini4Routes: discoveredRoutes,
                   },
                 );
 
@@ -2673,7 +2794,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = getTokenTracker().consume(account.index);
                 }
 
+                checkAborted()
+                dispatched = true
                 const response = await fetch(prepared.request, prepared.init);
+                // The POST was delivered: a response exists. Everything after
+                // this point is local response processing (empty-response
+                // checks, transforms, logging), so delivery is proven and its
+                // failures may fall back to the next endpoint/account like any
+                // other recoverable error.
+                dispatched = false
+                responseStatus = response.status
+                checkAborted()
                 pushDebug(`status=${response.status} ${response.statusText}`);
 
 
@@ -2689,12 +2820,29 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                   const defaultRetryMs = (config.default_retry_after_seconds ?? 60) * 1000;
                   const maxBackoffMs = (config.max_backoff_seconds ?? 60) * 1000;
-                  const headerRetryMs = retryAfterMsFromResponse(response, defaultRetryMs);
-                  const bodyInfo = await extractRetryInfoFromBody(response);
-                  const serverRetryMs = bodyInfo.retryDelayMs ?? headerRetryMs;
+                  const { bodyInfo, explicitDelay, unknown429, reason: rateLimitReason } = await getRetryEvidence(response)
+                  const serverRetryMs = explicitDelay ?? defaultRetryMs
+                  checkAborted()
 
-                  // [Enhanced Parsing] Pass status to handling logic
-                  const rateLimitReason = parseRateLimitReason(bodyInfo.reason, bodyInfo.message, response.status);
+                  if (unknown429) {
+                    pushDebug("429 without quota or retry information; returning provider response")
+                    return response
+                  }
+                  if (explicitDelay !== null && config.max_rate_limit_wait_seconds > 0 &&
+                      explicitDelay > config.max_rate_limit_wait_seconds * 1000) {
+                    accountManager.markRateLimitedWithReason(account, family, headerStyle, model, rateLimitReason, explicitDelay)
+                    accountManager.requestSaveToDisk()
+                    if (accountCount <= 1) {
+                      const fallback = await tryAgySdkFallbackForRequest(input, init, config, agySdkCredentials, urlString)
+                      if (fallback && !await shouldRetrySdkResponse(fallback)) {
+                        return fallback
+                      }
+                      return response
+                    }
+                    lastFailure = createFailureContext(response)
+                    shouldSwitchAccount = true
+                    break
+                  }
 
                   // STRATEGY 1: CAPACITY / SERVER ERROR (Transient)
                   // Goal: Wait and Retry SAME Account. DO NOT LOCK.
@@ -2710,7 +2858,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                        const maxDelayMs = 8000;
                        const exponentialDelay = Math.min(baseDelayMs * Math.pow(2, capacityRetryCount), maxDelayMs);
                        const jitter = exponentialDelay * (0.9 + Math.random() * 0.2);
-                       const waitMs = Math.round(jitter);
+                       const waitMs = Math.max(Math.round(jitter), explicitDelay ?? 0);
                        const waitSec = Math.round(waitMs / 1000);
 
                        pushDebug(`Server busy (${rateLimitReason}) on account ${account.index}, exponential backoff ${waitMs}ms (attempt ${capacityRetryCount + 1})`);
@@ -2760,7 +2908,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                        agySdkCredentials,
                        urlString,
                      );
-                     if (capacityAgySdkFallback && !isRetryableAgySdkCredentialStatus(capacityAgySdkFallback.status)) {
+                      if (capacityAgySdkFallback && !await shouldRetrySdkResponse(capacityAgySdkFallback)) {
                        return capacityAgySdkFallback;
                      }
 
@@ -2782,7 +2930,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   
                   // Only now do we call getRateLimitBackoff, which increments the global failure tracker
                   const quotaKey = headerStyleToQuotaKey(family);
-                  const { attempt, delayMs, isDuplicate } = getRateLimitBackoff(account.index, quotaKey, serverRetryMs);
+                  const { attempt, delayMs } = getRateLimitBackoff(account.index, quotaKey, serverRetryMs, maxBackoffMs);
                   
                   // Calculate potential backoffs
                   const smartBackoffMs = calculateBackoffMs(rateLimitReason, account.consecutiveFailures ?? 0, serverRetryMs);
@@ -2818,8 +2966,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                   // Progressive retry for standard 429s: 1st 429 → 1s then switch (if enabled) or retry same
                   if (attempt === 1 && rateLimitReason !== "QUOTA_EXHAUSTED") {
-                    await showToast(`Rate limited. Quick retry in 1s...`, "warning");
-                    await sleep(FIRST_RETRY_DELAY_MS, abortSignal);
                     
                     // CacheFirst mode: wait for same account if within threshold (preserves prompt cache)
                     if (config.scheduling_mode === 'cache_first') {
@@ -2845,6 +2991,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     }
                     
                     // Same endpoint retry for first RPM hit
+                    await sleep(Math.max(FIRST_RETRY_DELAY_MS, explicitDelay ?? 0), abortSignal)
                     i -= 1; 
                     continue;
                   }
@@ -2875,7 +3022,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   // that would short-circuit the account rotation below (shouldSwitchAccount)
                   // and strand a healthy account. On a retryable SDK failure, fall through
                   // to rotate.
-                  if (agySdkFallbackResponse && !isRetryableAgySdkCredentialStatus(agySdkFallbackResponse.status)) {
+                  if (agySdkFallbackResponse && !await shouldRetrySdkResponse(agySdkFallbackResponse)) {
                     return agySdkFallbackResponse;
                   }
 
@@ -3139,8 +3286,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = false;
                 }
 
+                checkAborted()
+                if (error instanceof Gemini4Unavailable) {
+                  return await tryAgySdkFallbackForRequest(input, init, config, agySdkCredentials, urlString) ?? error.response()
+                }
                 // Handle recoverable thinking errors - retry with forced recovery
-                if (error instanceof Error && error.message === "THINKING_RECOVERY_NEEDED") {
+                if (responseStatus !== undefined && responseStatus >= 400 && error instanceof Error && error.message === "THINKING_RECOVERY_NEEDED") {
                   // Only retry once with forced recovery to avoid infinite loops
                   if (!forceThinkingRecovery) {
                     pushDebug("thinking-recovery: API error detected, retrying with forced recovery");
@@ -3167,6 +3318,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   });
                 }
 
+                // A network/reader error from fetch() itself cannot prove that
+                // Google did not process the POST. Local response-processing
+                // errors (EmptyResponseError, transforms) already reset the
+                // flag once the response arrived, so they keep falling back.
+                if (dispatched) throw error
                 if (i < ANTIGRAVITY_ENDPOINT_FALLBACKS.length - 1) {
                   lastError = error instanceof Error ? error : new Error(String(error));
                   continue;
@@ -3718,10 +3874,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
               const projectId = await promptProjectId();
 
+              const authorization = await authorizeAntigravity(projectId, loginLifetime.signal);
+              const fallbackState = getStateFromAuthorizationUrl(authorization.url);
               const result = await (async (): Promise<AntigravityTokenExchangeResult> => {
-                const authorization = await authorizeAntigravity(projectId);
-                const fallbackState = getStateFromAuthorizationUrl(authorization.url);
-
                 console.log("\nOAuth URL:\n" + authorization.url + "\n");
 
                 if (useManualMode) {
@@ -3730,7 +3885,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     console.log("Could not open browser automatically.");
                     console.log("Please open the URL above manually in your local browser.\n");
                   }
-                  return promptManualOAuthInput(fallbackState);
+                  return await promptManualOAuthInput(fallbackState);
                 }
 
                 let listener: OAuthListener | null = null;
@@ -3768,7 +3923,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                           await listener.close();
                         } catch {}
                         
-                        return promptManualOAuthInput(fallbackState);
+                        return await promptManualOAuthInput(fallbackState);
                       }
                       throw err;
                     }
@@ -3778,7 +3933,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       return { type: "failed", error: "Missing code or state in callback URL" };
                     }
 
-                    return exchangeAntigravity(params.code, params.state);
+                    return await exchangeAntigravity(params.code, params.state, fallbackState);
                   } catch (error) {
                     if (error instanceof Error && error.message !== "SOFT_TIMEOUT") {
                       return {
@@ -3797,8 +3952,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   }
                 }
 
-                return promptManualOAuthInput(fallbackState);
-              })();
+                return await promptManualOAuthInput(fallbackState);
+              })().finally(() => cancelAuthorization(fallbackState));
 
               if (result.type === "failed") {
                 if (accounts.length === 0) {
@@ -3935,7 +4090,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             }
           }
 
-          const authorization = await authorizeAntigravity(projectId);
+          const authorization = await authorizeAntigravity(projectId, loginLifetime.signal);
           const fallbackState = getStateFromAuthorizationUrl(authorization.url);
 
           if (!useManualFlow) {
@@ -3983,7 +4138,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     return { type: "failed", error: "Invalid OAuth callback state" };
                   }
 
-                  const result = await exchangeAntigravity(params.code, params.state);
+                  const result = await exchangeAntigravity(params.code, params.state, fallbackState);
                   if (result.type === "success") {
                     try {
                       await persistAccountPool([result], false);
@@ -4013,6 +4168,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     error: error instanceof Error ? error.message : "Unknown error",
                   };
                 } finally {
+                  cancelAuthorization(fallbackState)
                   if (callbackTimer !== undefined) clearTimeout(callbackTimer);
                   oauthListeners.delete(listener);
                   try {
@@ -4038,7 +4194,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 return { type: "failed", error: "Invalid OAuth callback state" };
               }
 
-              const result = await exchangeAntigravity(params.code, params.state);
+              const result = await exchangeAntigravity(params.code, params.state, fallbackState);
               if (result.type === "success") {
                 try {
                   // TUI flow adds to existing accounts (non-destructive)

@@ -6,7 +6,8 @@ import type {
   IntegrationMethodRegistration,
 } from "@opencode/plugin/promise/integration"
 import type { SessionContext } from "@opencode/plugin/promise/session"
-import type { ProviderModel } from "./plugin/types.ts"
+import type { ProviderModel, ProviderModelsContext } from "./plugin/types.ts"
+import { modelsFromAntigravityAvailableModels, modelsFromGeminiApi } from "./plugin/config/models.ts"
 
 const core = vi.hoisted(() => ({
   create: vi.fn(),
@@ -53,7 +54,7 @@ interface LegacyHooks {
     }>
   }
   provider: {
-    models: () => Promise<Record<string, ProviderModel>>
+    models: (provider: unknown, context: ProviderModelsContext) => Promise<Record<string, ProviderModel>>
   }
   tool: Record<string, never>
   event: (input: unknown) => Promise<void>
@@ -211,6 +212,7 @@ function createContext(options: {
 } = {}): { context: TestContext; hooks: RegisteredHooks; providerModels: Model.Info[] } {
   const hooks: RegisteredHooks = { integration: [] }
   const providerModels = [...(options.existingModels ?? [])]
+  let applyProvider: ((editor: TestProviderEditor) => void) | undefined
 
   const integrationEditor: IntegrationEditor = {
     list: () => [],
@@ -260,8 +262,8 @@ function createContext(options: {
       },
     },
     provider: {
-      transform: async (callback) => { callback(providerEditor); return registration() },
-      reload: vi.fn(async () => undefined),
+      transform: async (callback) => { applyProvider = callback; callback(providerEditor); return registration() },
+      reload: vi.fn(async () => { applyProvider?.(providerEditor) }),
     },
     model: {
       transform: async (callback) => { callback(modelEditor); return registration() },
@@ -307,6 +309,81 @@ afterEach(() => {
 })
 
 describe("AntigravityV2Plugin", () => {
+  it("publishes the Gemini 4 family and its discovered levels across A/B/A", async () => {
+    const legacy = buildLegacy({ loader: {}, authorization: { method: "auto", callback: async (): Promise<OAuthResult> => ({
+      type: "success", refresh: "r", access: "a", expires: 1,
+    }) } })
+    const credential = { type: "oauth" as const, refresh: "A", access: "A", expires: Date.now() + 3_600_000 }
+    legacy.provider.models = async (_provider, ctx) => {
+      if (ctx.auth?.type !== "oauth" || ctx.auth.refresh !== "A") return modelsFromAntigravityAvailableModels({
+        "gemini-4-neon": { supportsThinking: false }, "gemini-4-argon-low": { disabled: true },
+      })
+      return {
+        ...modelsFromAntigravityAvailableModels({
+          "gemini-4-argon-low": {}, "gemini-4-argon-high": {},
+          "gemini-4-carbon": {}, "gemini-4-neon": {}, "hydrogen-wire": { modelName: "gemini-4-hydrogen" },
+          "gemini-4-hydrogen-sonar": { modelName: "gemini-4-hydrogen" },
+        }),
+        ...modelsFromGeminiApi([{ name: "models/gemini-4-neon", supportedGenerationMethods: ["generateContent"] }]),
+      }
+    }
+    core.create.mockReturnValue(async () => legacy)
+    core.loadConfig.mockReturnValue({ session_recovery: false })
+    const { context, providerModels } = createContext({ credential, existingModels: [providerModel("host-model")] })
+    const snapshots: Record<string, string[]>[] = []
+    const record = () => snapshots.push(Object.fromEntries(providerModels.map(m => [m.id, m.variants.map(v => String(v.id))])))
+    context.event.subscribe = async function* () {
+      record()
+      for (const id of ["B", "A"]) {
+        credential.refresh = id
+        yield { type: "credential.switched" }
+        record()
+      }
+    }
+    await (await setup(context))()
+    const three = ["low", "medium", "high"]
+    const four = [...three, "xhigh"]
+    expect(snapshots[0]).toMatchObject({
+      "antigravity-gemini-4-argon": ["low", "high"], "antigravity-gemini-4-carbon": three,
+      "antigravity-gemini-4-hydrogen": four, "antigravity-gemini-4-neon": four,
+      "antigravity-gemini-4-hydrogen-sonar": three, "gemini-4-neon": four,
+    })
+    expect(Object.keys(snapshots[1]!).sort()).toEqual(["antigravity-gemini-4-neon", "host-model"])
+    expect(snapshots[1]!["antigravity-gemini-4-neon"]).toEqual([])
+    expect(snapshots[2]).toEqual(snapshots[0])
+  })
+  it("removes disabled models on A to B and restores them on B to A", async () => {
+    const sonar = "antigravity-gemini-4-hydrogen-sonar"
+    const flash = "antigravity-gemini-3.8-flash"
+    const legacy = buildLegacy({ loader: {}, authorization: { method: "auto", callback: async (): Promise<OAuthResult> => ({
+      type: "success", refresh: "r", access: "a", expires: 1,
+    }) } })
+    const credential = { type: "oauth" as const, refresh: "A", access: "A", expires: Date.now() + 3_600_000 }
+    legacy.provider.models = async (_provider, ctx) => {
+      const a = ctx.auth?.type === "oauth" && ctx.auth.refresh === "A"
+      ctx.onUnavailable?.(new Set(a ? [] : [sonar]))
+      const models: Record<string, ProviderModel> = { [flash]: { variants: a ? { high: { thinkingLevel: "high" } } : {} } }
+      if (a) models[sonar] = { name: "Sonar" }
+      return models
+    }
+    core.create.mockReturnValue(async () => legacy)
+    core.loadConfig.mockReturnValue({ session_recovery: false })
+    const snapshots: Array<[boolean, string[], boolean]> = []
+    const { context, providerModels } = createContext({ credential, existingModels: [providerModel("public-model"), providerModel(sonar)] })
+    const record = () => snapshots.push([providerModels.some(m => m.id === sonar),
+      providerModels.find(m => m.id === flash)!.variants.map(v => String(v.id)), providerModels.some(m => m.id === "public-model")])
+    context.event.subscribe = async function* () {
+      record()
+      for (const id of ["B", "A"]) {
+        credential.refresh = id
+        yield { type: "credential.switched" }
+        record()
+      }
+    }
+    const cleanup = await setup(context)
+    await cleanup()
+    expect(snapshots).toEqual([[true, ["high"], true], [false, [], true], [true, ["high"], true]])
+  })
   it("registers code OAuth and preserves custom provider models", async () => {
     const loader: LegacyLoader = { apiKey: "", fetch: vi.fn() }
     const legacy = buildLegacy({

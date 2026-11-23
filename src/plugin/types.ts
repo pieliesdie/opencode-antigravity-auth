@@ -36,6 +36,8 @@ export interface Provider {
 
 export interface ProviderModelsContext {
   auth?: AuthDetails;
+  /** V2 merges the result with a host-owned catalog in a separate hook. */
+  onUnavailable?: (ids: ReadonlySet<string>) => void
 }
 
 export interface ProviderHook {

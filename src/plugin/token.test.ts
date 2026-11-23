@@ -66,6 +66,27 @@ describe("refreshAccessToken", () => {
     expect(client.auth.set.mock.calls.length).toBe(0);
   });
 
+  it("shares a renewal but keeps each caller's project", async () => {
+    const network = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ access_token: "shared", expires_in: 3600 }))
+    const [a, b] = await Promise.all(["one", "two"].map(project =>
+      refreshAccessToken({ ...baseAuth, refresh: `same|${project}` }, createClient(), "google")))
+    expect(network).toHaveBeenCalledTimes(1)
+    expect([a?.refresh, b?.refresh]).toEqual(["same|one", "same|two"])
+    expect([a?.access, b?.access]).toEqual(["shared", "shared"])
+  })
+
+  it("preserves timeout cause and allows a later refresh", async () => {
+    const reason = new DOMException("timeout", "TimeoutError")
+    const network = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_url, init) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal)
+        throw reason
+      }).mockResolvedValue(Response.json({ access_token: "restored", expires_in: 3600 }))
+    await expect(refreshAccessToken(baseAuth, createClient(), "google")).rejects.toMatchObject({ cause: reason })
+    expect((await refreshAccessToken(baseAuth, createClient(), "google"))?.access).toBe("restored")
+    expect(network).toHaveBeenCalledTimes(2)
+  })
+
   it("throws a typed error on invalid_grant", async () => {
     const client = createClient();
     const fetchMock = vi.fn(async () => {

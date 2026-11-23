@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { generatePKCE } from "@openauthjs/openauth/pkce";
 
 import {
@@ -23,6 +24,20 @@ interface PkcePair {
 interface AntigravityAuthState {
   verifier: string;
   projectId: string;
+  expires: number;
+  timer: ReturnType<typeof setTimeout>
+  detach?: () => void
+}
+
+const pending = new Map<string, AntigravityAuthState>()
+const LOGIN_TTL_MS = 30 * 60_000
+
+export function cancelAuthorization(state: string): void {
+  const attempt = pending.get(state)
+  if (!attempt) return
+  clearTimeout(attempt.timer)
+  attempt.detach?.()
+  pending.delete(state)
 }
 
 /**
@@ -63,34 +78,11 @@ interface AntigravityUserInfo {
 }
 
 /**
- * Encode an object into a URL-safe base64 string.
- */
-function encodeState(payload: AntigravityAuthState): string {
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-}
-
-/**
- * Decode an OAuth state parameter back into its structured representation.
- */
-function decodeState(state: string): AntigravityAuthState {
-  const normalized = state.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
-  const json = Buffer.from(padded, "base64").toString("utf8");
-  const parsed = JSON.parse(json);
-  if (typeof parsed.verifier !== "string") {
-    throw new Error("Missing PKCE verifier in state");
-  }
-  return {
-    verifier: parsed.verifier,
-    projectId: typeof parsed.projectId === "string" ? parsed.projectId : "",
-  };
-}
-
-/**
  * Build the Antigravity OAuth authorization URL including PKCE and optional project metadata.
  */
-export async function authorizeAntigravity(projectId = ""): Promise<AntigravityAuthorization> {
+export async function authorizeAntigravity(projectId = "", signal?: AbortSignal): Promise<AntigravityAuthorization> {
   const pkce = (await generatePKCE()) as PkcePair;
+  signal?.throwIfAborted()
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", ANTIGRAVITY_CLIENT_ID);
@@ -99,10 +91,17 @@ export async function authorizeAntigravity(projectId = ""): Promise<AntigravityA
   url.searchParams.set("scope", ANTIGRAVITY_SCOPES.join(" "));
   url.searchParams.set("code_challenge", pkce.challenge);
   url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set(
-    "state",
-    encodeState({ verifier: pkce.verifier, projectId: projectId || "" }),
-  );
+  const now = Date.now()
+  const state = randomBytes(32).toString("base64url")
+  const cancel = () => cancelAuthorization(state)
+  const timer = setTimeout(cancel, LOGIN_TTL_MS)
+  timer.unref()
+  signal?.addEventListener("abort", cancel, { once: true })
+  pending.set(state, {
+    verifier: pkce.verifier, projectId, expires: now + LOGIN_TTL_MS, timer,
+    detach: () => signal?.removeEventListener("abort", cancel),
+  })
+  url.searchParams.set("state", state)
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");
 
@@ -201,9 +200,15 @@ async function fetchProjectID(accessToken: string): Promise<string> {
 export async function exchangeAntigravity(
   code: string,
   state: string,
+  expectedState: string = state,
 ): Promise<AntigravityTokenExchangeResult> {
   try {
-    const { verifier, projectId } = decodeState(state);
+    const attempt = pending.get(expectedState)
+    if (!attempt || state !== expectedState || attempt.expires <= Date.now()) {
+      return { type: "failed", error: "Invalid or expired OAuth callback state" }
+    }
+    cancelAuthorization(expectedState)
+    const { verifier, projectId } = attempt
 
     const startTime = Date.now();
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {

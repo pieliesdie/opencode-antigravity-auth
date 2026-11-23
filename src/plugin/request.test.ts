@@ -1519,7 +1519,7 @@ describe("Gemini-3 thought signature restore (sanitizeRequestPayloadForAntigravi
 
     const fnPart = payload.contents[0].parts.find((p: any) => p.functionCall);
     expect(fnPart.thoughtSignature).toBe(realSignature);
-    expect(fnPart.thought_signature).toBe(realSignature);
+    expect(fnPart).not.toHaveProperty("thought_signature");
     expect(fnPart.thoughtSignature).not.toBe(SKIP_THOUGHT_SIGNATURE);
   });
 

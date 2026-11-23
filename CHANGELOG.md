@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.8] - 2026-11-24
+
+- Route Gemini 4 Argon, Carbon, Hydrogen and Neon by the OAuth account/project registry or configured Gemini API key. A catalog miss is reported before generation. Neon and Hydrogen support `xhigh`; Hydrogen Sonar retains its own OAuth ID.
+
+- Preserve the provider's unexplained 429 response without penalizing accounts. Respect retry headers; stop on cancellation or uncertain delivery of a model request.
+- Omit OpenCode 2.2.5's incompatible session-move catalog entry and stock worktree hint on Antigravity requests. Authored chat and system instructions are preserved.
+- Bind OAuth callbacks to one-time local PKCE state. Refresh on demand by default, sharing concurrent renewals and retaining network errors. Browser and manual login remain available.
+- Preserve Gemini tool call/result identities through the OpenCode V2 Google driver. Normalize supported tool-result turns without changing multimodal or Claude conversations.
+- Scope the model registry to the account and project, including disabled models, thinking capabilities and discovered Gemini 4 Hydrogen Sonar. Startup no longer waits on the version lookup; searches can be both cancelled and timed out.
+
 ## [2.0.7] - 2026-11-07
 
 ### Changed

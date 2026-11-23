@@ -3,9 +3,11 @@ import { formatRefreshParts, parseRefreshParts, calculateTokenExpiry } from "./a
 import { clearCachedAuth, storeCachedAuth } from "./cache";
 import { createLogger } from "./logger";
 import { invalidateProjectContextCache } from "./project";
-import type { OAuthAuthDetails, PluginClient, RefreshParts } from "./types";
+import type { OAuthAuthDetails, PluginClient } from "./types";
 
 const log = createLogger("token");
+interface RefreshedToken { access_token: string; expires_in: number; refresh_token?: string }
+const refreshing = new Map<string, Promise<{ token: RefreshedToken; started: number }>>()
 
 interface OAuthErrorPayload {
   error?:
@@ -92,16 +94,43 @@ export async function refreshAccessToken(
     return undefined;
   }
 
+  let task = refreshing.get(parts.refreshToken)
+  if (!task) {
+    task = fetchRefresh(parts.refreshToken).finally(() => refreshing.delete(parts.refreshToken))
+    refreshing.set(parts.refreshToken, task)
+  }
   try {
-    const startTime = Date.now();
+    const { token, started } = await task
+    const updatedAuth = {
+      ...auth,
+      access: token.access_token,
+      expires: calculateTokenExpiry(started, token.expires_in),
+      refresh: formatRefreshParts({ ...parts, refreshToken: token.refresh_token ?? parts.refreshToken }),
+    }
+    storeCachedAuth(updatedAuth)
+    invalidateProjectContextCache(auth.refresh)
+    return updatedAuth
+  } catch (error) {
+    if (error instanceof AntigravityTokenRefreshError && error.code === "invalid_grant") {
+      invalidateProjectContextCache(auth.refresh)
+      clearCachedAuth(auth.refresh)
+    }
+    throw error
+  }
+}
+
+async function fetchRefresh(refreshToken: string): Promise<{ token: RefreshedToken; started: number }> {
+  const started = Date.now()
+  try {
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
         grant_type: "refresh_token",
-        refresh_token: parts.refreshToken,
+        refresh_token: refreshToken,
         client_id: ANTIGRAVITY_CLIENT_ID,
         client_secret: ANTIGRAVITY_CLIENT_SECRET,
       }),
@@ -121,12 +150,6 @@ export async function refreshAccessToken(
       const message = details ? `${baseMessage} - ${details}` : baseMessage;
       log.warn("Token refresh failed", { status: response.status, code, details });
 
-      if (code === "invalid_grant") {
-        log.warn("Google revoked the stored refresh token - reauthentication required");
-        invalidateProjectContextCache(auth.refresh);
-        clearCachedAuth(auth.refresh);
-      }
-
       throw new AntigravityTokenRefreshError({
         message,
         code,
@@ -136,35 +159,14 @@ export async function refreshAccessToken(
       });
     }
 
-    const payload = (await response.json()) as {
-      access_token: string;
-      expires_in: number;
-      refresh_token?: string;
-    };
-
-    const refreshedParts: RefreshParts = {
-      refreshToken: payload.refresh_token ?? parts.refreshToken,
-      projectId: parts.projectId,
-      managedProjectId: parts.managedProjectId,
-    };
-
-    const updatedAuth: OAuthAuthDetails = {
-      ...auth,
-      access: payload.access_token,
-      expires: calculateTokenExpiry(startTime, payload.expires_in),
-      refresh: formatRefreshParts(refreshedParts),
-    };
-
-    storeCachedAuth(updatedAuth);
-    invalidateProjectContextCache(auth.refresh);
-
-    return updatedAuth;
+    const token: RefreshedToken = await response.json()
+    if (!token.access_token || !(token.expires_in > 0)) throw new Error("Invalid token response")
+    return { token, started }
   } catch (error) {
     if (error instanceof AntigravityTokenRefreshError) {
       throw error;
     }
-    log.error("Unexpected token refresh error", { error: String(error) });
-    return undefined;
+    throw new Error(`Antigravity token refresh failed: ${String(error)}`, { cause: error })
   }
 }
 

@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { AgySdkCloudProjectSchema, AntigravityConfigSchema, DEFAULT_CONFIG } from "./schema";
 
+it("refreshes on demand by default and accepts explicit background refresh", () => {
+  expect(DEFAULT_CONFIG.proactive_token_refresh).toBe(false)
+  expect(AntigravityConfigSchema.parse({}).proactive_token_refresh).toBe(false)
+  expect(AntigravityConfigSchema.parse({ proactive_token_refresh: true }).proactive_token_refresh).toBe(true)
+})
+
 describe("removed cli_first option", () => {
   it("is gone from DEFAULT_CONFIG and the JSON schema", () => {
     expect(DEFAULT_CONFIG).not.toHaveProperty("cli_first");

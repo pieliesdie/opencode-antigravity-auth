@@ -69,7 +69,16 @@ export const ANTIGRAVITY_DEFAULT_PROJECT_ID = "default-cli-project";
  * rejected or gated by the backend (cf. upstream issue #592).
  */
 export const ANTIGRAVITY_CLI_USER_AGENT =
-  "antigravity/cli/1.1.13 (aidev_client; os_type=linux; arch=amd64; cl=964361259; auth_method=consumer)";
+  // Modern agy CLI identity. The backend gates newer models (Gemini 4 family,
+  // Neon included) on the CLI UA version: the previous 1.1.13/cl=964361259 UA
+  // produced 404 "Requested entity was not found" for Neon while the official
+  // client served it (live, 2026-11-23). cortexkit's deployment runs 1.5.8 /
+  // cl=1020628950 across all models, so the newer identity is safe globally.
+  // os_type/arch mirror the running process like the official CLI does.
+  "antigravity/cli/1.5.8 (aidev_client; os_type=" +
+    (process.platform === "win32" ? "WINDOWS" : process.platform === "darwin" ? "DARWIN" : "LINUX") +
+    "; arch=" + (process.arch === "arm64" ? "arm64" : "x64") +
+    "; cl=1020628950; auth_method=consumer)";
 
 export const ANTIGRAVITY_VERSION_FALLBACK = "1.18.3";
 let antigravityVersion = ANTIGRAVITY_VERSION_FALLBACK;
