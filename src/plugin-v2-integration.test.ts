@@ -150,7 +150,7 @@ afterEach(async () => {
 describe("Antigravity transport through @ai-sdk/google", () => {
   it.each([
     ["argon", "medium", "gemini-4-argon-medium"],
-    ["carbon", "high", "carbon-backend-v2"],
+    ["carbon", "xhigh", "carbon-backend-v2"],
     ["hydrogen", "xhigh", "hydrogen-backend-v2"],
     ["neon", "xhigh", "neon-backend-v2"],
     ["hydrogen-sonar", "low", "gemini-4-hydrogen-sonar"],
@@ -170,10 +170,10 @@ describe("Antigravity transport through @ai-sdk/google", () => {
     })
     const sdk = createGoogleGenerativeAI({ apiKey: "placeholder", fetch: driverFetch(await oauthLoader(["first"])) })
     await sdk(model).doGenerate(generateOptions(level))
-    expect(sent).toEqual([{ id: backend, level: name === "hydrogen-sonar" ? "LOW" : name === "neon" ? 100 : level, token: "Bearer access" }])
+    expect(sent).toEqual([{ id: backend, level: level.toUpperCase(), token: "Bearer access" }])
   })
 
-  it.each([["argon", "high"], ["carbon", "medium"], ["hydrogen", "xhigh"], ["neon", "xhigh"]] as const)(
+  it.each([["argon", "high"], ["carbon", "xhigh"], ["hydrogen", "xhigh"], ["neon", "xhigh"]] as const)(
     "uses the public %s ID and configured key when OAuth does not list it", async (name, level) => {
       const model = `gemini-4-${name}`
       vi.stubEnv("GEMINI_API_KEY", "fixture-key")
@@ -214,8 +214,8 @@ describe("Antigravity transport through @ai-sdk/google", () => {
     expect(posts).toEqual([])
   })
 
-  it("sends Neon with the CLI tier ids, model_enum labels and uppercase thinking levels", async () => {
-    const sent: Array<{ id: string; labels: unknown; level: string | number }> = []
+  it("sends Gemini 4 models with CLI tier ids, model_enum labels and uppercase thinking levels", async () => {
+    const sent: Array<{ id: string; labels: unknown; level: string }> = []
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, options?: RequestInit) => {
       const url = requestUrl(input)
       if (url.includes("fetchAvailableModels")) return Response.json({ models: {
@@ -223,6 +223,10 @@ describe("Antigravity transport through @ai-sdk/google", () => {
         "gemini-4-neon-medium": { model: "MODEL_PLACEHOLDER_M533" },
         "gemini-4-neon-high": { model: "MODEL_PLACEHOLDER_M532" },
         "gemini-4-neon-xhigh": { model: "MODEL_PLACEHOLDER_M535" },
+        "gemini-4-hydrogen-low": { model: "MODEL_PLACEHOLDER_M527" },
+        "gemini-4-hydrogen-medium": { model: "MODEL_PLACEHOLDER_M526" },
+        "gemini-4-hydrogen-high": { model: "MODEL_PLACEHOLDER_M525" },
+        "gemini-4-hydrogen-xhigh": { model: "MODEL_PLACEHOLDER_M528" },
       } })
       if (!url.includes(":generateContent")) return new Response("1.0.0")
       const body = JSON.parse(String(options?.body))
@@ -233,34 +237,52 @@ describe("Antigravity transport through @ai-sdk/google", () => {
     for (const level of ["low", "medium", "high", "xhigh"] as const) {
       await sdk("antigravity-gemini-4-neon").doGenerate(generateOptions(level))
     }
+    for (const level of ["low", "medium", "high", "xhigh"] as const) {
+      await sdk("antigravity-gemini-4-hydrogen").doGenerate(generateOptions(level))
+    }
     expect(sent).toEqual([
       { id: "gemini-4-neon-low", labels: { model_enum: "MODEL_PLACEHOLDER_M534" }, level: "LOW" },
       { id: "gemini-4-neon-medium", labels: { model_enum: "MODEL_PLACEHOLDER_M533" }, level: "MEDIUM" },
       { id: "gemini-4-neon-high", labels: { model_enum: "MODEL_PLACEHOLDER_M532" }, level: "HIGH" },
-      { id: "gemini-4-neon-xhigh", labels: { model_enum: "MODEL_PLACEHOLDER_M535" }, level: 100 },
+      { id: "gemini-4-neon-xhigh", labels: { model_enum: "MODEL_PLACEHOLDER_M535" }, level: "XHIGH" },
+      { id: "gemini-4-hydrogen-low", labels: { model_enum: "MODEL_PLACEHOLDER_M527" }, level: "LOW" },
+      { id: "gemini-4-hydrogen-medium", labels: { model_enum: "MODEL_PLACEHOLDER_M526" }, level: "MEDIUM" },
+      { id: "gemini-4-hydrogen-high", labels: { model_enum: "MODEL_PLACEHOLDER_M525" }, level: "HIGH" },
+      { id: "gemini-4-hydrogen-xhigh", labels: { model_enum: "MODEL_PLACEHOLDER_M528" }, level: "XHIGH" },
     ])
   })
 
-  it("proceeds with Neon CLI defaults when a nonempty catalog omits it", async () => {
+  it("rejects Neon before generation when a nonempty catalog omits it", async () => {
+    const posts: string[] = []
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = requestUrl(input)
+      if (url.includes(":generateContent")) posts.push(url)
+      if (url.includes("fetchAvailableModels")) return Response.json({ models: { "gemini-4-argon-high": {} } })
+      return new Response("1.0.0")
+    })
+    const loader = await oauthLoader(["first"])
+    const result = await loader.fetch(modelUrl.replace("antigravity-gemini-3.8-flash", "antigravity-gemini-4-neon"), init)
+    expect(result.status).toBe(404)
+    expect((await result.json()).error.message).toContain("gemini-4-neon is not listed")
+    expect(posts).toEqual([])
+  })
+
+  it("defaults bare Neon picker id to the High tier when listed", async () => {
     const bodies: string[] = []
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, options?: RequestInit) => {
       const url = requestUrl(input)
-      if (url.includes("fetchAvailableModels")) return Response.json({ models: { "gemini-4-argon-high": {} } })
+      if (url.includes("fetchAvailableModels")) return Response.json({ models: { "gemini-4-neon-high": { model: "MODEL_PLACEHOLDER_M532" } } })
       if (!url.includes(":generateContent")) return new Response("1.0.0")
       bodies.push(String(options?.body))
       return googleResponse()
     })
     const sdk = createGoogleGenerativeAI({ apiKey: "placeholder", fetch: driverFetch(await oauthLoader(["first"])) })
-    await sdk("antigravity-gemini-4-neon").doGenerate(generateOptions("high"))
-    // Bare picker id without a variant defaults to the CLI's High tier.
     await sdk("antigravity-gemini-4-neon").doGenerate({ prompt: generateOptions("high").prompt })
-    expect(bodies).toHaveLength(2)
-    for (const raw of bodies) {
-      const body = JSON.parse(raw)
-      expect(body.model).toBe("gemini-4-neon-high")
-      expect(body.request.labels).toEqual({ model_enum: "MODEL_PLACEHOLDER_M532" })
-      expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe("HIGH")
-    }
+    expect(bodies).toHaveLength(1)
+    const body = JSON.parse(bodies[0]!)
+    expect(body.model).toBe("gemini-4-neon-high")
+    expect(body.request.labels).toEqual({ model_enum: "MODEL_PLACEHOLDER_M532" })
+    expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe("HIGH")
   })
 
   it("rejects Neon before generation when every listed tier is disabled", async () => {
@@ -292,7 +314,7 @@ describe("Antigravity transport through @ai-sdk/google", () => {
     })
     const sdk = createGoogleGenerativeAI({ apiKey: "placeholder", fetch: driverFetch(await oauthLoader(["first"])) })
     await sdk("antigravity-gemini-4-neon").doGenerate(generateOptions("xhigh"))
-    expect(sent).toEqual([{ id: "gemini-4-neon", level: 100 }])
+    expect(sent).toEqual([{ id: "gemini-4-neon", level: "XHIGH" }])
   })
 
   it("keeps the original Neon 429 when discovery fails", async () => {

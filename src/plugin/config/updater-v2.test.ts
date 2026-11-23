@@ -85,12 +85,20 @@ describe("V2 model configuration", () => {
     const models = config.providers.google.models
     for (const family of ["Argon", "Carbon", "Hydrogen", "Neon"]) {
       const levels = ["low", "medium", "high"]
-      if (family === "Hydrogen" || family === "Neon") levels.push("xhigh")
+      if (family !== "Argon") levels.push("xhigh")
       const id = `gemini-4-${family.toLowerCase()}`
       expect(models[id]).toBeUndefined()
       expect(models[`antigravity-${id}`]).toMatchObject({
         name: `Gemini 4 ${family} (Antigravity)`,
         variants: levels.map(id => ({ id, settings: { thinkingLevel: id } })),
+      })
+    }
+    for (const tier of ["Opus", "Sonnet"]) {
+      const id = `antigravity-claude-${tier.toLowerCase()}-5-5`
+      expect(models[id]).toMatchObject({
+        name: `Claude ${tier} 5.5 (Antigravity)`,
+        limit: { context: 1000000, output: 128000 },
+        variants: ["low", "medium", "high"].map(id => ({ id, settings: { thinkingLevel: id } })),
       })
     }
     expect(config.providers.google.package).toBe("aisdk:@ai-sdk/google")

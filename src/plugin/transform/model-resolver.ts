@@ -6,7 +6,7 @@
  */
 
 import type { ResolvedModel, ThinkingTier, GoogleSearchConfig } from "./types";
-import { gemini4Model } from "../gemini4.ts"
+import { gemini4Levels, gemini4Model } from "../gemini4.ts"
 
 
 /**
@@ -76,6 +76,16 @@ const GEMINI_4_ARGON_MODELS = {
   medium: "gemini-4-argon-medium",
   high: "gemini-4-argon-high",
 } as const;
+const CLAUDE_55_REGEX =
+  /^(claude-(?:opus|sonnet)-5-5)(?:-(minimal|low|medium|high))?$/i;
+const CLAUDE_55_MODEL_ENUMS = {
+  "claude-opus-5-5-low": "MODEL_PLACEHOLDER_M400",
+  "claude-opus-5-5-medium": "MODEL_PLACEHOLDER_M401",
+  "claude-opus-5-5-high": "MODEL_PLACEHOLDER_M402",
+  "claude-sonnet-5-5-low": "MODEL_PLACEHOLDER_M403",
+  "claude-sonnet-5-5-medium": "MODEL_PLACEHOLDER_M404",
+  "claude-sonnet-5-5-high": "MODEL_PLACEHOLDER_M405",
+} as const;
 /**
  * Gemini generations that take a thinkingLevel string and thought signatures:
  * Gemini 3 and every later one (gemini-3.8-flash, gemini-4-argon, ...).
@@ -100,6 +110,7 @@ function supportsThinkingTiers(model: string): boolean {
   return (
     isGemini3OrLaterModel(lower) ||
     lower.includes("gemini-2.5") ||
+    isClaude55Model(lower) ||
     (lower.includes("claude") && lower.includes("thinking"))
   );
 }
@@ -140,6 +151,7 @@ function isThinkingCapableModel(model: string): boolean {
   const lower = model.toLowerCase();
   return (
     lower.includes("thinking") ||
+    isClaude55Model(lower) ||
     isGemini3OrLaterModel(lower) ||
     lower.includes("gemini-2.5")
   );
@@ -205,11 +217,37 @@ export function resolveAntigravityGemini4ArgonBackendModel(
   return GEMINI_4_ARGON_MODELS[level];
 }
 
+export function isClaude55Model(model: string): boolean {
+  return CLAUDE_55_REGEX.test(model.replace(QUOTA_PREFIX_REGEX, ""));
+}
+
+/**
+ * Antigravity serves Claude 5.5 Opus/Sonnet as tier-specific backend ids
+ * (`claude-{opus,sonnet}-5-5-{low,medium,high}`); bare ids return 404.
+ */
+export function resolveAntigravityClaude55BackendModel(
+  model: string,
+  thinkingLevel?: string,
+): { backend: string; level: "low" | "medium" | "high"; modelEnum: string } | undefined {
+  const match = model.replace(QUOTA_PREFIX_REGEX, "").match(CLAUDE_55_REGEX);
+  if (!match) {
+    return undefined;
+  }
+  const base = match[1]!.toLowerCase() as "claude-opus-5-5" | "claude-sonnet-5-5";
+  const rawLevel = (thinkingLevel ?? match[2] ?? "high").toLowerCase();
+  const level = rawLevel === "minimal" ? "low" : rawLevel;
+  if (level !== "low" && level !== "medium" && level !== "high") {
+    return undefined;
+  }
+  const backend = `${base}-${level}` as keyof typeof CLAUDE_55_MODEL_ENUMS;
+  return { backend, level, modelEnum: CLAUDE_55_MODEL_ENUMS[backend] };
+}
+
 export function getDefaultGemini3ThinkingLevel(model: string): string {
   const normalized = model.toLowerCase().replace(QUOTA_PREFIX_REGEX, "");
-  const argon = /^gemini-4-argon(?:-(low|medium|high))?$/.exec(normalized);
-  if (argon) {
-    return argon[1] ?? "high";
+  const g4 = gemini4Model(normalized);
+  if (g4) {
+    return g4.level ?? (g4.model === "gemini-4-hydrogen-sonar" ? "low" : "high");
   }
   if (/^gemini-3\.[678]-flash(?:-|$)/.test(normalized)) {
     return "medium";
@@ -239,8 +277,22 @@ export function resolveModelWithTier(requestedModel: string): ResolvedModel {
   const isAntigravity = QUOTA_PREFIX_REGEX.test(requestedModel);
   const modelWithoutQuota = requestedModel.replace(QUOTA_PREFIX_REGEX, "");
   const family = gemini4Model(modelWithoutQuota)
-  if (family?.level === "xhigh" && (family.model === "gemini-4-neon" || family.model === "gemini-4-hydrogen")) {
+  if (family?.level === "xhigh" && gemini4Levels(family.model).includes("xhigh")) {
     return { actualModel: family.model, thinkingLevel: "xhigh", isThinkingModel: true, quotaPreference: "antigravity", explicitQuota: isAntigravity }
+  }
+  const claude55Match = modelWithoutQuota.match(CLAUDE_55_REGEX);
+  if (claude55Match) {
+    const resolvedClaude55 = resolveAntigravityClaude55BackendModel(modelWithoutQuota);
+    if (resolvedClaude55) {
+      return {
+        actualModel: resolvedClaude55.backend,
+        thinkingLevel: resolvedClaude55.level,
+        ...(claude55Match[2] ? { tier: resolvedClaude55.level } : {}),
+        isThinkingModel: true,
+        quotaPreference: "antigravity",
+        explicitQuota: isAntigravity,
+      };
+    }
   }
 
   const tier = extractThinkingTierFromModel(modelWithoutQuota);
@@ -312,7 +364,7 @@ export function resolveModelWithTier(requestedModel: string): ResolvedModel {
     if (isEffectiveGemini3) {
       return {
         actualModel: resolvedModel,
-        thinkingLevel: isAntigravity && family?.model === "gemini-4-neon" ? "high" : getDefaultGemini3ThinkingLevel(resolvedModel),
+        thinkingLevel: getDefaultGemini3ThinkingLevel(resolvedModel),
         isThinkingModel: true,
         quotaPreference,
         explicitQuota,

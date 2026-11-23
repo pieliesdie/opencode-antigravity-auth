@@ -1907,15 +1907,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
         if (registry) {
           for (const model of GEMINI4_MODELS) {
             const id = `antigravity-${model}`
-            if (model === "gemini-4-neon") {
-              // Live (2026-11-23): Google served Neon to the official client
-              // while its catalog omitted it entirely. An omission inside a
-              // nonempty catalog is therefore not proof of unavailability,
-              // but a listed group with every tier disabled is.
-              const neonRoutes = gemini4Routes(registry).get("gemini-4-neon")
-              if (neonRoutes && !neonRoutes.length) unavailable.add(id)
-              continue
-            }
             if (!(id in antigravityModels)) unavailable.add(id)
           }
           // A nonempty registry can list only backend tier IDs, not the
@@ -2610,15 +2601,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               }
               if (registry) {
                 discoveredRoutes = gemini4Routes(registry).get(gemini4.model)
-                // Live (2026-11-23): Google served Neon to the official client
-                // while its catalog omitted it entirely. An omission inside a
-                // nonempty catalog is therefore not proof of unavailability for
-                // Neon: proceed to generation and let Google decide. A
-                // present-but-empty (disabled) group, an empty catalog, or an
-                // omission of another Gemini 4 model stays fatal here.
-                const neonCatalogOmission = gemini4.model === "gemini-4-neon" &&
-                  discoveredRoutes === undefined && Object.keys(registry).length > 0
-                if (!discoveredRoutes?.length && !neonCatalogOmission) {
+                if (!discoveredRoutes?.length) {
                   const fallback = await tryAgySdkFallbackForRequest(input, init, config, agySdkCredentials, urlString, true)
                   if (fallback && !(fallback instanceof Gemini4CatalogResponse)) return fallback
                   return new Gemini4CatalogResponse(`${gemini4.model} is not listed as enabled for the current Antigravity account/project. ` +

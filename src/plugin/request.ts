@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeGeminiTools } from "./google-tools.ts"
-import { gemini4Model, neonWireTier, selectGemini4Route, Gemini4Unavailable, type Gemini4Route } from "./gemini4.ts"
+import { gemini4Model, gemini4WireTier, selectGemini4Route, Gemini4Unavailable, type Gemini4Route } from "./gemini4.ts"
 import { applySystemCompatibility } from "./opencode-system.ts"
 import {
   ANTIGRAVITY_ENDPOINT,
@@ -71,6 +71,8 @@ import {
   resolveModelForHeaderStyle,
   resolveAntigravityGemini38FlashBackendModel,
   resolveAntigravityGemini4ArgonBackendModel,
+  resolveAntigravityClaude55BackendModel,
+  isClaude55Model,
   getDefaultGemini3ThinkingLevel,
   isClaudeModel,
   isClaudeThinkingModel,
@@ -1324,24 +1326,38 @@ export function prepareAntigravityRequest(
     tierThinkingLevel = routes[0]?.level ?? tierThinkingLevel
   }
   function registryBackend(requests: Array<Record<string, unknown>>) {
-    const neon = headerStyle === "antigravity" && gemini4Model(rawModel)?.model === "gemini-4-neon"
-      ? neonWireTier(tierThinkingLevel) : undefined
-    const route = routes && selectGemini4Route(routes, neon?.level ?? tierThinkingLevel?.toLowerCase())
+    const g4 = headerStyle === "antigravity" ? gemini4Model(rawModel) : undefined
+    const wire = g4 ? gemini4WireTier(g4.model, tierThinkingLevel) : undefined
+    const claude55 = headerStyle === "antigravity" && !g4
+      ? resolveAntigravityClaude55BackendModel(effectiveModel, tierThinkingLevel)
+      : undefined
+    const route = routes && selectGemini4Route(routes, wire?.level ?? tierThinkingLevel?.toLowerCase())
     if (routes && !route) throw new Gemini4Unavailable(`${rawModel} (${tierThinkingLevel}) is not listed for this Antigravity account/project.`)
+    const modelEnum = route?.modelEnum ?? wire?.modelEnum ?? claude55?.modelEnum
     for (const request of requests) {
       const config = request.generationConfig
-      if (neon) {
+      if (modelEnum) {
         const labels = request.labels
-        request.labels = { ...(labels && typeof labels === "object" ? labels : {}), model_enum: route?.modelEnum ?? neon.modelEnum }
+        request.labels = { ...(labels && typeof labels === "object" ? labels : {}), model_enum: modelEnum }
       }
-      if (config && typeof config === "object" && "thinkingConfig" in config) {
+      if (claude55) {
+        const genConfig = config && typeof config === "object" ? (config as Record<string, unknown>) : {}
+        const tc = genConfig.thinkingConfig && typeof genConfig.thinkingConfig === "object"
+          ? (genConfig.thinkingConfig as Record<string, unknown>)
+          : {}
+        delete tc.thinkingBudget
+        if (typeof tc.includeThoughts !== "boolean") tc.includeThoughts = true
+        tc.thinkingLevel = claude55.level.toUpperCase()
+        genConfig.thinkingConfig = tc
+        request.generationConfig = genConfig
+      } else if (config && typeof config === "object" && "thinkingConfig" in config) {
         if (route?.supportsThinking === false) delete config.thinkingConfig
-        else if (neon && config.thinkingConfig && typeof config.thinkingConfig === "object") {
-          Object.assign(config.thinkingConfig, { thinkingLevel: neon.thinkingLevel })
+        else if (wire && config.thinkingConfig && typeof config.thinkingConfig === "object") {
+          Object.assign(config.thinkingConfig, { thinkingLevel: wire.thinkingLevel })
         }
       }
     }
-    return route?.backend ?? neon?.backend ?? effectiveModel
+    return route?.backend ?? wire?.backend ?? claude55?.backend ?? effectiveModel
   }
   let signatureSessionKey = buildSignatureSessionKey(
     PLUGIN_SESSION_ID,
@@ -1377,7 +1393,7 @@ export function prepareAntigravityRequest(
           }
         }
 
-        if (isGemini3Model(effectiveModel)) {
+        if (isGemini3Model(effectiveModel) || isClaude55Model(effectiveModel)) {
           for (const req of requestObjects) {
             const variantConfig = extractVariantThinkingConfig(
               (req as any).providerOptions as
@@ -1416,6 +1432,10 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
+          const claude55Backend = resolveAntigravityClaude55BackendModel(
+            effectiveModel,
+            tierThinkingLevel,
+          );
           if (gemini38FlashBackendModel) {
             effectiveModel = gemini38FlashBackendModel;
             wrappedBody.model = gemini38FlashBackendModel;
@@ -1425,6 +1445,10 @@ export function prepareAntigravityRequest(
             if (tierThinkingLevel === "minimal") {
               tierThinkingLevel = "low";
             }
+          } else if (claude55Backend) {
+            effectiveModel = claude55Backend.backend;
+            wrappedBody.model = claude55Backend.backend;
+            tierThinkingLevel = claude55Backend.level;
           }
         }
 
@@ -1433,7 +1457,7 @@ export function prepareAntigravityRequest(
         // Strip tier suffix from model for cache key to prevent cache misses on tier change
         // e.g., "claude-opus-4-6-thinking-high" -> "claude-opus-4-6-thinking"
         const modelForCacheKey = effectiveModel.replace(
-          /-(minimal|low|medium|high)$/i,
+          /-(minimal|low|medium|high|xhigh)$/i,
           "",
         );
         signatureSessionKey = buildSignatureSessionKey(
@@ -1529,21 +1553,24 @@ export function prepareAntigravityRequest(
           rawGenerationConfig,
         );
         const isGemini3 = isGemini3Model(effectiveModel);
+        const usesThinkingLevel = isGemini3 || isClaude55Model(effectiveModel);
 
         log.debug(
           `[ThinkingResolution] rawModel=${rawModel} resolvedModel=${effectiveModel} resolvedTier=${tierThinkingLevel ?? "none"} variantLevel=${variantConfig?.thinkingLevel ?? "none"} variantBudget=${variantConfig?.thinkingBudget ?? "none"} providerOptions.google=${JSON.stringify((requestPayload.providerOptions as any)?.google ?? null)} generationConfig.thinkingConfig=${JSON.stringify((rawGenerationConfig as any)?.thinkingConfig ?? null)}`,
         );
 
-        if (variantConfig?.thinkingLevel && isGemini3) {
-          // Gemini 3 native format - use thinkingLevel directly
+        if (variantConfig?.thinkingLevel && usesThinkingLevel) {
+          // Gemini 3 / Claude 5.5 native format - use thinkingLevel directly
           tierThinkingLevel = variantConfig.thinkingLevel;
           tierThinkingBudget = undefined;
         } else if (variantConfig?.thinkingBudget) {
-          if (isGemini3) {
-            // Legacy format for Gemini 3 - convert with deprecation warning
-            log.warn(
-              "[Deprecated] Using thinkingBudget for Gemini 3 model. Use thinkingLevel instead.",
-            );
+          if (usesThinkingLevel) {
+            if (isGemini3) {
+              // Legacy format for Gemini 3 - convert with deprecation warning
+              log.warn(
+                "[Deprecated] Using thinkingBudget for Gemini 3 model. Use thinkingLevel instead.",
+              );
+            }
             tierThinkingLevel =
               variantConfig.thinkingBudget <= 8192
                 ? "low"
@@ -1569,6 +1596,10 @@ export function prepareAntigravityRequest(
               effectiveModel,
               tierThinkingLevel,
             );
+          const claude55Backend = resolveAntigravityClaude55BackendModel(
+            effectiveModel,
+            tierThinkingLevel,
+          );
           if (gemini38FlashBackendModel) {
             effectiveModel = gemini38FlashBackendModel;
           } else if (gemini4ArgonBackendModel) {
@@ -1576,6 +1607,9 @@ export function prepareAntigravityRequest(
             if (tierThinkingLevel === "minimal") {
               tierThinkingLevel = "low";
             }
+          } else if (claude55Backend) {
+            effectiveModel = claude55Backend.backend;
+            tierThinkingLevel = claude55Backend.level;
           }
         }
 

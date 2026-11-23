@@ -344,7 +344,7 @@ describe("AntigravityV2Plugin", () => {
     const three = ["low", "medium", "high"]
     const four = [...three, "xhigh"]
     expect(snapshots[0]).toMatchObject({
-      "antigravity-gemini-4-argon": ["low", "high"], "antigravity-gemini-4-carbon": three,
+      "antigravity-gemini-4-argon": ["low", "high"], "antigravity-gemini-4-carbon": four,
       "antigravity-gemini-4-hydrogen": four, "antigravity-gemini-4-neon": four,
       "antigravity-gemini-4-hydrogen-sonar": three, "gemini-4-neon": four,
     })

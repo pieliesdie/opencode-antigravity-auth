@@ -17,8 +17,9 @@ export function gemini4Model(id: string | undefined | null) {
 }
 
 export function gemini4Levels(model: ModelId): Level[] {
-  return model === "gemini-4-neon" || model === "gemini-4-hydrogen"
-    ? ["low", "medium", "high", "xhigh"] : ["low", "medium", "high"]
+  return model === "gemini-4-argon" || model === "gemini-4-hydrogen-sonar"
+    ? ["low", "medium", "high"]
+    : ["low", "medium", "high", "xhigh"]
 }
 
 export interface Gemini4Route {
@@ -29,50 +30,60 @@ export interface Gemini4Route {
   modelEnum?: string
 }
 
-// Antigravity CLI 1.5.9 used these labels and wire levels for Neon.
-const NEON_TIERS = {
-  low: { modelEnum: "MODEL_PLACEHOLDER_M534", thinkingLevel: "LOW" },
-  medium: { modelEnum: "MODEL_PLACEHOLDER_M533", thinkingLevel: "MEDIUM" },
-  high: { modelEnum: "MODEL_PLACEHOLDER_M532", thinkingLevel: "HIGH" },
-  xhigh: { modelEnum: "MODEL_PLACEHOLDER_M535", thinkingLevel: 100 },
-} as const
+// Antigravity CLI model_enum fallback values observed in daily fetchAvailableModels.
+const GEMINI4_MODEL_ENUMS: Partial<Record<ModelId, Partial<Record<Level, string>>>> = {
+  "gemini-4-argon": {
+    low: "MODEL_PLACEHOLDER_M419",
+    medium: "MODEL_PLACEHOLDER_M418",
+    high: "MODEL_PLACEHOLDER_M417",
+  },
+  "gemini-4-hydrogen": {
+    low: "MODEL_PLACEHOLDER_M527",
+    medium: "MODEL_PLACEHOLDER_M526",
+    high: "MODEL_PLACEHOLDER_M525",
+    xhigh: "MODEL_PLACEHOLDER_M528",
+  },
+  "gemini-4-neon": {
+    low: "MODEL_PLACEHOLDER_M534",
+    medium: "MODEL_PLACEHOLDER_M533",
+    high: "MODEL_PLACEHOLDER_M532",
+    xhigh: "MODEL_PLACEHOLDER_M535",
+  },
+  "gemini-4-hydrogen-sonar": {
+    low: "MODEL_PLACEHOLDER_M578",
+    medium: "MODEL_PLACEHOLDER_M578",
+    high: "MODEL_PLACEHOLDER_M578",
+  },
+}
 
-export function neonWireTier(requested = "high") {
-  const normalized = requested.toLowerCase()
-  const level = gemini4Levels("gemini-4-neon").find(tier => tier === (normalized === "minimal" ? "low" : normalized))
-  if (!level) throw new Gemini4Unavailable(`Unsupported Neon thinking level: ${requested}`)
-  return { level, backend: `gemini-4-neon-${level}`, ...NEON_TIERS[level] }
+export function gemini4WireTier(model: ModelId, requested?: string) {
+  const defaultLevel: Level = model === "gemini-4-hydrogen-sonar" ? "low" : "high"
+  const raw = (requested ?? defaultLevel).toLowerCase()
+  const normalized = raw === "minimal" ? "low" : raw
+  const level = gemini4Levels(model).find(tier => tier === normalized)
+  if (!level) throw new Gemini4Unavailable(`Unsupported ${model} thinking level: ${requested}`)
+  const backend = model === "gemini-4-hydrogen-sonar" ? model : `${model}-${level}`
+  return { level, backend, thinkingLevel: level.toUpperCase(), modelEnum: GEMINI4_MODEL_ENUMS[model]?.[level] }
 }
 
 /** The registry key is the wire ID; modelName can identify the public family.
  * In particular a Sonar key remains Sonar even when labelled Hydrogen. */
 export function gemini4Routes(registry: AntigravityAvailableModels) {
   const routes = new Map<ModelId, Gemini4Route[]>()
-  const neonEntries: Array<Gemini4Route & { disabled?: boolean }> = []
   for (const [sourceId, entry] of Object.entries(registry)) {
+    if (entry.disabled) continue
     const backend = sourceId.replace(/^models\//, "")
     const id = gemini4Model(backend) ?? gemini4Model(entry.modelName)
     if (!id) continue
-    const route = { backend, level: id.level, supportsThinking: entry.supportsThinking, displayName: entry.displayName }
-    if (id.model === "gemini-4-neon") {
-      neonEntries.push({ ...route, modelEnum: entry.model, disabled: entry.disabled })
-      continue
-    }
-    if (entry.disabled) continue
     const group = routes.get(id.model) ?? []
-    group.push(route)
-    routes.set(id.model, group)
-  }
-  // Absent = unknown; present but empty = explicitly disabled. When a specific
-  // tier is disabled, fall back to an enabled untiered alias if one is listed.
-  if (neonEntries.length) {
-    const enabled = gemini4Levels("gemini-4-neon").flatMap(level => {
-      const exact = neonEntries.filter(route => route.level === level)
-      const route = exact.find(route => !route.disabled)
-        ?? neonEntries.find(route => !route.level && !route.disabled)
-      return route ? [{ ...route, level }] : []
+    group.push({
+      backend,
+      level: id.level,
+      supportsThinking: entry.supportsThinking,
+      displayName: entry.displayName,
+      modelEnum: entry.model,
     })
-    routes.set("gemini-4-neon", enabled)
+    routes.set(id.model, group)
   }
   return routes
 }

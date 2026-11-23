@@ -1,6 +1,7 @@
 import {
+  ANTIGRAVITY_CLI_USER_AGENT,
+  ANTIGRAVITY_ENDPOINT,
   ANTIGRAVITY_ENDPOINT_PROD,
-  getAntigravityHeaders,
   ANTIGRAVITY_PROVIDER_ID,
 } from "../constants";
 import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./auth";
@@ -183,34 +184,45 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = F
   }
 }
 
+const FETCH_AVAILABLE_MODELS_ENDPOINTS = [
+  ANTIGRAVITY_ENDPOINT,
+  ANTIGRAVITY_ENDPOINT_PROD,
+] as const;
+
 export async function fetchAvailableModels(
   accessToken: string,
   projectId: string,
 ): Promise<FetchAvailableModelsResponse> {
-  const endpoint = ANTIGRAVITY_ENDPOINT_PROD;
-  const quotaUserAgent = getAntigravityHeaders()["User-Agent"] || "antigravity/windows/amd64";
   const errors: string[] = [];
+  const body = JSON.stringify(projectId ? { project: projectId } : {});
 
-  const body = projectId ? { project: projectId } : {};
-  const response = await fetchWithTimeout(`${endpoint}/v1internal:fetchAvailableModels`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      "User-Agent": quotaUserAgent,
-    },
-    body: JSON.stringify(body),
-  });
+  for (const endpoint of FETCH_AVAILABLE_MODELS_ENDPOINTS) {
+    try {
+      const response = await fetchWithTimeout(`${endpoint}/v1internal:fetchAvailableModels`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "User-Agent": ANTIGRAVITY_CLI_USER_AGENT,
+        },
+        body,
+      });
 
-  if (response.ok) {
-    return (await response.json()) as FetchAvailableModelsResponse;
+      if (response.ok) {
+        return (await response.json()) as FetchAvailableModelsResponse;
+      }
+
+      const message = await response.text().catch(() => "");
+      const snippet = message.trim().slice(0, 200);
+      errors.push(
+        `fetchAvailableModels ${response.status} at ${endpoint}${snippet ? `: ${snippet}` : ""}`,
+      );
+    } catch (error) {
+      errors.push(
+        `fetchAvailableModels error at ${endpoint}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
-
-  const message = await response.text().catch(() => "");
-  const snippet = message.trim().slice(0, 200);
-  errors.push(
-    `fetchAvailableModels ${response.status} at ${endpoint}${snippet ? `: ${snippet}` : ""}`,
-  );
 
   throw new Error(errors.join("; ") || "fetchAvailableModels failed");
 }

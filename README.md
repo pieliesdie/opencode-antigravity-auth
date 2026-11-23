@@ -139,8 +139,8 @@ opencode run "Hello" --model=google/antigravity-claude-opus-4-6-thinking --varia
 listed for the selected Antigravity account and project. If its catalog omits
 the model, the plugin can use a configured Gemini API key when API-key fallback
 is enabled. The OpenCode model list alone does not establish account access.
-Neon and Hydrogen support `low`, `medium`, `high`, and `xhigh`; Carbon and Argon
-support `low`, `medium`, and `high`. `antigravity-gemini-4-hydrogen-sonar` is a
+Neon, Hydrogen, and Carbon support `low`, `medium`, `high`, and `xhigh`; Argon
+supports `low`, `medium`, and `high`. `antigravity-gemini-4-hydrogen-sonar` is a
 separate discovery-only OAuth model.
 
 **Antigravity quota** (default routing for Claude and Gemini):
@@ -149,12 +149,14 @@ separate discovery-only OAuth model.
 |-------|----------|-------|
 | `antigravity-gemini-3.8-flash` | low, medium, high | **Newest.** Gemini 3.8 Flash with thinking (medium default) |
 | `antigravity-gemini-4-argon` | low, medium, high | 256K context, high default; minimal maps to low |
-| `antigravity-gemini-4-carbon` | low, medium, high | Gemini 4 Carbon |
+| `antigravity-gemini-4-carbon` | low, medium, high, xhigh | Gemini 4 Carbon |
 | `antigravity-gemini-4-hydrogen` | low, medium, high, xhigh | Gemini 4 Hydrogen |
 | `antigravity-gemini-4-neon` | low, medium, high, xhigh | Gemini 4 Neon |
 | `antigravity-gemini-3-flash` | minimal, low, medium, high | Gemini 3 Flash with thinking |
 | `antigravity-gemini-3.1-flash-lite` | minimal, low, medium, high | Gemini 3.1 Flash Lite with thinking |
 | `antigravity-gemini-3.5-flash-lite` | minimal, low, medium, high | Gemini 3.5 Flash Lite with thinking |
+| `antigravity-claude-opus-5-5` | low, medium, high | Claude Opus 5.5 (1M context, 128K output, high default) |
+| `antigravity-claude-sonnet-5-5` | low, medium, high | Claude Sonnet 5.5 (1M context, 128K output, high default) |
 | `antigravity-claude-sonnet-4-6` | — | Claude Sonnet 4.6 |
 | `antigravity-claude-opus-4-6-thinking` | low, max | Claude Opus 4.6 with extended thinking |
 
@@ -219,7 +221,8 @@ Add this to your `~/.config/opencode/opencode.json`:
           "variants": {
             "low": { "thinkingLevel": "low" },
             "medium": { "thinkingLevel": "medium" },
-            "high": { "thinkingLevel": "high" }
+            "high": { "thinkingLevel": "high" },
+            "xhigh": { "thinkingLevel": "xhigh" }
           }
         },
         "antigravity-gemini-4-hydrogen": {
@@ -261,6 +264,26 @@ Add this to your `~/.config/opencode/opencode.json`:
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
           "variants": {
             "minimal": { "thinkingLevel": "minimal" },
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
+        "antigravity-claude-opus-5-5": {
+          "name": "Claude Opus 5.5 (Antigravity)",
+          "limit": { "context": 1000000, "output": 128000 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
+            "low": { "thinkingLevel": "low" },
+            "medium": { "thinkingLevel": "medium" },
+            "high": { "thinkingLevel": "high" }
+          }
+        },
+        "antigravity-claude-sonnet-5-5": {
+          "name": "Claude Sonnet 5.5 (Antigravity)",
+          "limit": { "context": 1000000, "output": 128000 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "variants": {
             "low": { "thinkingLevel": "low" },
             "medium": { "thinkingLevel": "medium" },
             "high": { "thinkingLevel": "high" }

@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.1.0] - 2026-11-24
+
+### Added
+
+- **Claude 5.5 Opus & Sonnet** - Added `antigravity-claude-opus-5-5` and `antigravity-claude-sonnet-5-5` (`1M` context, `128K` output, `low`/`medium`/`high` variants, high default) to `OPENCODE_MODEL_DEFINITIONS` (`Configure models`) with tier-specific Antigravity backend routing (`claude-{opus,sonnet}-5-5-{low,medium,high}`) and `model_enum` labels.
+
+### Changed
+
+- **Daily CLI Model Catalog Discovery** - Switched `fetchAvailableModels()` to query the daily endpoint (`daily-cloudcode-pa.googleapis.com`, falling back to prod) with `ANTIGRAVITY_CLI_USER_AGENT` so Gemini 4 and tiered models are discovered accurately; removed the Neon-specific catalog omission bypass.
+- **Unified Gemini 4 OAuth Wire Handling** - Extended `xhigh`, `high` default thinking level, uppercase wire thinking levels (`LOW`/`MEDIUM`/`HIGH`/`XHIGH`), and `model_enum` labels across all Gemini 4 models (keeping `high` max for Argon and `low`/`medium`/`high` for Hydrogen Sonar).
+- **Cleaner Model Discovery List** - Stripped tier suffixes from grouped Gemini 4 display names, filtered internal `tiered`/`worker` registry entries, and grouped tiered `gemini-3.8-flash-*` and `claude-{opus,sonnet}-5-5-*` entries into single models with variants.
+
 ## [2.0.8] - 2026-11-24
 
 - Route Gemini 4 Argon, Carbon, Hydrogen and Neon by the OAuth account/project registry or configured Gemini API key. A catalog miss is reported before generation. Neon and Hydrogen support `xhigh`; Hydrogen Sonar retains its own OAuth ID.

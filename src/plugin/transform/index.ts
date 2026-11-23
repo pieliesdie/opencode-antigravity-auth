@@ -25,6 +25,8 @@ export {
   resolveModelForHeaderStyle,
   resolveAntigravityGemini38FlashBackendModel,
   resolveAntigravityGemini4ArgonBackendModel,
+  resolveAntigravityClaude55BackendModel,
+  isClaude55Model,
   isGemini3OrLaterModel,
   isGemini4ArgonModel,
   getDefaultGemini3ThinkingLevel,

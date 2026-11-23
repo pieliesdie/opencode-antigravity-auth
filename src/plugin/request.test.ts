@@ -772,7 +772,7 @@ it("removes API key headers", () => {
           );
           const body = JSON.parse(result.init.body as string);
           expect(body.model).toBe(`gemini-4-argon-${expected}`);
-          expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected);
+          expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected.toUpperCase());
           expect(body.request.generationConfig.thinkingConfig).not.toHaveProperty("thinkingBudget");
         }
       });
@@ -789,7 +789,7 @@ it("removes API key headers", () => {
         const expected = tier === "minimal" ? "low" : tier;
         const body = JSON.parse(result.init.body as string);
         expect(body.model).toBe(`gemini-4-argon-${expected}`);
-        expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected);
+        expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected.toUpperCase());
       });
 
       it.each([
@@ -824,10 +824,65 @@ it("removes API key headers", () => {
           const body = JSON.parse(result.init.body as string);
           expect(result.effectiveModel).toBe(`gemini-4-argon-${expected}`);
           expect(body.model).toBe(`gemini-4-argon-${expected}`);
-          expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected);
+          expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected.toUpperCase());
           for (const field of ["temperature", "topP", "topK", "candidateCount"]) {
             expect(body.request.generationConfig).not.toHaveProperty(field);
           }
+        }
+      });
+
+      it("rejects xhigh for Argon", () => {
+        expect(() =>
+          prepareAntigravityRequest(
+            "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-argon:generateContent",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+                generationConfig: { thinkingConfig: { thinkingLevel: "xhigh" } },
+              }),
+            },
+            mockAccessToken,
+            mockProjectId,
+            undefined,
+            "antigravity",
+          ),
+        ).toThrow(/Unsupported gemini-4-argon thinking level: xhigh/);
+      });
+    });
+
+    describe("Claude 5.5 Opus / Sonnet", () => {
+      it.each([
+        ["opus", undefined, "high", "MODEL_PLACEHOLDER_M402"],
+        ["opus", "low", "low", "MODEL_PLACEHOLDER_M400"],
+        ["opus", "medium", "medium", "MODEL_PLACEHOLDER_M401"],
+        ["opus", "high", "high", "MODEL_PLACEHOLDER_M402"],
+        ["sonnet", undefined, "high", "MODEL_PLACEHOLDER_M405"],
+        ["sonnet", "low", "low", "MODEL_PLACEHOLDER_M403"],
+        ["sonnet", "medium", "medium", "MODEL_PLACEHOLDER_M404"],
+        ["sonnet", "high", "high", "MODEL_PLACEHOLDER_M405"],
+      ] as const)("routes Claude %s 5.5 level %s to tiered backend with model_enum", (tier, level, expected, modelEnum) => {
+        for (const wrapped of [false, true]) {
+          const request = {
+            contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+            ...(level ? { generationConfig: { thinkingConfig: { thinkingLevel: level } } } : {}),
+          };
+          const result = prepareAntigravityRequest(
+            `https://generativelanguage.googleapis.com/v1beta/models/antigravity-claude-${tier}-5-5:generateContent`,
+            {
+              method: "POST",
+              body: JSON.stringify(wrapped ? { project: mockProjectId, request } : request),
+            },
+            mockAccessToken,
+            mockProjectId,
+            undefined,
+            "antigravity",
+          );
+          const body = JSON.parse(result.init.body as string);
+          expect(result.effectiveModel).toBe(`claude-${tier}-5-5-${expected}`);
+          expect(body.model).toBe(`claude-${tier}-5-5-${expected}`);
+          expect(body.request.labels).toEqual({ model_enum: modelEnum });
+          expect(body.request.generationConfig.thinkingConfig.thinkingLevel).toBe(expected.toUpperCase());
         }
       });
     });

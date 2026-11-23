@@ -127,6 +127,26 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   },
+  "antigravity-claude-opus-5-5": {
+    name: "Claude Opus 5.5 (Antigravity)",
+    limit: { context: 1000000, output: 128000 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    },
+  },
+  "antigravity-claude-sonnet-5-5": {
+    name: "Claude Sonnet 5.5 (Antigravity)",
+    limit: { context: 1000000, output: 128000 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    },
+  },
   "antigravity-claude-sonnet-4-6": {
     name: "Claude Sonnet 4.6 (Antigravity)",
     limit: { context: 200000, output: 64000 },
@@ -200,6 +220,9 @@ function titleFromModelId(modelId: string): string {
 }
 
 function defaultLimitForModel(modelId: string): ModelLimit {
+  if (/claude-(?:opus|sonnet)-5-5/i.test(modelId)) {
+    return { context: 1000000, output: 128000 };
+  }
   if (modelId.includes("claude")) {
     return { context: 200000, output: 64000 };
   }
@@ -210,6 +233,13 @@ function defaultVariantsForModel(modelId: string): Record<string, ModelVariant> 
   const normalized = modelId.toLowerCase().replace(/^antigravity-/, "");
   const family = gemini4Model(normalized)
   if (family) return Object.fromEntries(gemini4Levels(family.model).map(thinkingLevel => [thinkingLevel, { thinkingLevel }]))
+  if (/^claude-(?:opus|sonnet)-5-5(?:-|$)/.test(normalized)) {
+    return {
+      low: { thinkingLevel: "low" },
+      medium: { thinkingLevel: "medium" },
+      high: { thinkingLevel: "high" },
+    };
+  }
   if (normalized.includes("claude") && normalized.includes("thinking")) {
     return {
       low: { thinkingConfig: { thinkingBudget: 8192 } },
@@ -251,9 +281,22 @@ function mergeWithStaticDefinition(
   };
 }
 
+const GROUPED_TIERED_MODEL_REGEX = /^(gemini-3\.8-flash|claude-(?:opus|sonnet)-5-5)(?:-(low|medium|high))?$/i;
+const TIERED_LEVELS = ["low", "medium", "high"] as const;
+
+function groupedTieredModel(id: string | undefined | null) {
+  const bare = id?.replace(/^models\//, "").replace(/^antigravity-/, "")
+  if (!bare) return undefined
+  const match = GROUPED_TIERED_MODEL_REGEX.exec(bare)
+  if (!match) return undefined
+  return { model: match[1]!.toLowerCase(), level: match[2]?.toLowerCase() }
+}
+
 export function antigravityModelIdFromEntry(sourceId: string, entry: AntigravityAvailableModel): string | null {
   const family = gemini4Model(sourceId) ?? gemini4Model(entry.modelName)
   if (family) return `antigravity-${family.model}`
+  const grouped = groupedTieredModel(sourceId) ?? groupedTieredModel(entry.modelName)
+  if (grouped) return `antigravity-${grouped.model}`
   const rawId = (entry.modelName || sourceId).trim();
   if (!rawId) return null;
   const modelId = rawId.replace(/^models\//, "");
@@ -285,17 +328,28 @@ export function modelsFromGeminiApi(models: GeminiApiModel[]): OpencodeModelDefi
   return definitions;
 }
 
+const INTERNAL_ANTIGRAVITY_MODEL_REGEX = /(?:^|-)(?:tiered|worker)(?:-|$)/i;
+
 export function modelsFromAntigravityAvailableModels(
   models: AntigravityAvailableModels,
 ): OpencodeModelDefinitions {
   const definitions: OpencodeModelDefinitions = {};
+  const tieredGroups = new Map<string, Array<{ level?: string; supportsThinking?: boolean; displayName?: string }>>()
 
   for (const [sourceId, entry] of Object.entries(models)) {
     if (entry.disabled) continue
     const modelId = antigravityModelIdFromEntry(sourceId, entry);
     if (!modelId) continue;
 
+    if (INTERNAL_ANTIGRAVITY_MODEL_REGEX.test(sourceId) || INTERNAL_ANTIGRAVITY_MODEL_REGEX.test(modelId)) continue
     if (gemini4Model(modelId)) continue // Group tiered registry entries below.
+    const grouped = groupedTieredModel(sourceId) ?? groupedTieredModel(entry.modelName)
+    if (grouped) {
+      const group = tieredGroups.get(grouped.model) ?? []
+      group.push({ level: grouped.level, supportsThinking: entry.supportsThinking, displayName: entry.displayName })
+      tieredGroups.set(grouped.model, group)
+      continue
+    }
     if (!entry.displayName && !OPENCODE_MODEL_DEFINITIONS[modelId]) continue
     const variants = defaultVariantsForModel(modelId)
     const discovered: OpencodeModelDefinition = {
@@ -311,6 +365,29 @@ export function modelsFromAntigravityAvailableModels(
     }
   }
 
+  for (const [model, routes] of tieredGroups) {
+    if (!routes.length) continue
+    const id = `antigravity-${model}`
+    const levels = TIERED_LEVELS.filter(level => {
+      const route = routes.find(r => r.level === level) ?? routes.find(r => !r.level)
+      return route && route.supportsThinking !== false
+    })
+    const displayName = routes
+      .find(route => route.displayName)
+      ?.displayName?.replace(/\s*\((?:low|medium|high|xhigh|minimal)\)\s*$/i, "")
+      .trim()
+    const base = OPENCODE_MODEL_DEFINITIONS[id]
+    definitions[id] = {
+      ...(base ?? {}),
+      name: `${displayName || titleFromModelId(model)} (Antigravity)`,
+      limit: base?.limit ?? defaultLimitForModel(model),
+      modalities: base?.modalities ?? DEFAULT_MODALITIES,
+      ...(levels.length
+        ? { variants: Object.fromEntries(levels.map(thinkingLevel => [thinkingLevel, { thinkingLevel }])) }
+        : { variants: undefined, supportsThinking: false }),
+    }
+  }
+
   for (const [model, routes] of gemini4Routes(models)) {
     if (!routes.length) continue
     const id = `antigravity-${model}`
@@ -318,8 +395,12 @@ export function modelsFromAntigravityAvailableModels(
       const route = selectGemini4Route(routes, level)
       return route && route.supportsThinking !== false
     })
+    const displayName = routes
+      .find(route => route.displayName)
+      ?.displayName?.replace(/\s*\((?:low|medium|high|xhigh|minimal)\)\s*$/i, "")
+      .trim()
     definitions[id] = {
-      name: `${routes[0]?.displayName ?? titleFromModelId(model)} (Antigravity)`,
+      name: `${displayName || titleFromModelId(model)} (Antigravity)`,
       limit: OPENCODE_MODEL_DEFINITIONS[id]?.limit ?? defaultLimitForModel(model),
       modalities: DEFAULT_MODALITIES,
       ...(model === "gemini-4-hydrogen-sonar" || model === "gemini-4-argon" ? { temperature: false } : {}),

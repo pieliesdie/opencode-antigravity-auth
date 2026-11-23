@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { __testExports } from "./quota.ts";
+import {
+  ANTIGRAVITY_CLI_USER_AGENT,
+  ANTIGRAVITY_ENDPOINT,
+  ANTIGRAVITY_ENDPOINT_PROD,
+} from "../constants.ts";
+import { __testExports, fetchAvailableModels } from "./quota.ts";
 
 describe("Antigravity quota aggregation", () => {
   it("uses the best available Gemini variant instead of the most exhausted rollout variant", () => {
@@ -140,5 +145,44 @@ describe("mapWithConcurrency", () => {
   it("returns an empty array for empty input", async () => {
     const results = await __testExports.mapWithConcurrency([], 3, async (item) => item);
     expect(results).toEqual([]);
+  });
+});
+
+describe("fetchAvailableModels", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("queries the daily endpoint with the Antigravity CLI user-agent", async () => {
+    const calls: Array<{ url: string; ua: string | null }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), ua: new Headers(init?.headers).get("user-agent") });
+      return Response.json({ models: { "gemini-4-hydrogen-high": { displayName: "Gemini 4 Hydrogen (High)" } } });
+    }));
+
+    const result = await fetchAvailableModels("token", "proj");
+    expect(result.models?.["gemini-4-hydrogen-high"]?.displayName).toBe("Gemini 4 Hydrogen (High)");
+    expect(calls).toEqual([
+      { url: `${ANTIGRAVITY_ENDPOINT}/v1internal:fetchAvailableModels`, ua: ANTIGRAVITY_CLI_USER_AGENT },
+    ]);
+  });
+
+  it("falls back to prod when the daily endpoint fails", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.startsWith(ANTIGRAVITY_ENDPOINT)) {
+        return new Response("unavailable", { status: 503 });
+      }
+      return Response.json({ models: { "gemini-4-argon-high": {} } });
+    }));
+
+    const result = await fetchAvailableModels("token", "proj");
+    expect(result.models?.["gemini-4-argon-high"]).toEqual({});
+    expect(urls).toEqual([
+      `${ANTIGRAVITY_ENDPOINT}/v1internal:fetchAvailableModels`,
+      `${ANTIGRAVITY_ENDPOINT_PROD}/v1internal:fetchAvailableModels`,
+    ]);
   });
 });
