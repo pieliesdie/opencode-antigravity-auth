@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { prepareAntigravityRequest } from "./request.ts"
 import { retryAfterMs } from "./retry-after.ts"
 
-const url = "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-hydrogen-sonar:generateContent"
+const url = "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-4-hydrogen:generateContent"
 const intro = "## Code Mode tools (call only inside `execute`)\n- opencode (2 tools)\n"
 const entry = "  - tools.opencode.session_move({\n  directory: string,\n}): Promise<{\n  directory: string,\n}> // Move a session to another directory, or omit sessionID to move the current session.\n"
 const next = "  - tools.opencode.session_rename({ title: string }): Promise<void> // Rename."
@@ -23,13 +23,6 @@ it.each([false, true])("preserves authored mentions and removes both stock const
     expect(text).toContain(authored)
     expect(wire.contents).toEqual(request.contents)
   }
-})
-
-it.each([undefined, "low", "medium", "high", "minimal"])("sends Sonar under its own ID with level %s", level => {
-  const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { thinkingConfig: { thinkingLevel: level } } }
-  const wire = JSON.parse(String(prepareAntigravityRequest(url, { method: "POST", body: JSON.stringify(body) }, "token", "p", undefined, "antigravity").init.body))
-  expect(wire.model).toBe("gemini-4-hydrogen-sonar")
-  expect(wire.request.generationConfig.thinkingConfig.thinkingLevel).toBe(level === "minimal" || !level ? "LOW" : level.toUpperCase())
 })
 
 it("reads server retry times without treating a missing header as a deadline", () => {

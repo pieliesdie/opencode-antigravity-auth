@@ -140,8 +140,7 @@ listed for the selected Antigravity account and project. If its catalog omits
 the model, the plugin can use a configured Gemini API key when API-key fallback
 is enabled. The OpenCode model list alone does not establish account access.
 Neon, Hydrogen, and Carbon support `low`, `medium`, `high`, and `xhigh`; Argon
-supports `low`, `medium`, and `high`. `antigravity-gemini-4-hydrogen-sonar` is a
-separate discovery-only OAuth model.
+supports `low`, `medium`, and `high`.
 
 **Antigravity quota** (default routing for Claude and Gemini):
 

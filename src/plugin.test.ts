@@ -78,7 +78,7 @@ describe("createAntigravityPlugin provider models", () => {
     } finally { finish(new Response("1.0.0")); vi.unstubAllGlobals() }
   })
   it("scopes discovery fallback and empty results to the account and project", async () => {
-    const sonar = "gemini-4-hydrogen-sonar"
+    const pro = "gemini-3.8-pro"
     const flash = "gemini-3.8-flash"
     let offline = false
     let empty = false
@@ -87,7 +87,7 @@ describe("createAntigravityPlugin provider models", () => {
       if (offline) throw new Error("offline")
       const a = new Headers(init?.headers).get("authorization") === "Bearer A"
       return Response.json({ models: empty ? {} : {
-        [sonar]: { disabled: !a }, [flash]: { displayName: "Flash", supportsThinking: a },
+        [pro]: { displayName: "Gemini 3.8 Pro", disabled: !a }, [flash]: { displayName: "Flash", supportsThinking: a },
       } })
     })
     try {
@@ -96,23 +96,23 @@ describe("createAntigravityPlugin provider models", () => {
         const result = await plugin.provider!.models!({ id: "google" }, { auth: {
           type: "oauth", access: id, refresh: `${id}|${project}`, expires: Date.now() + 3_600_000,
         } })
-        return { sonar: result[`antigravity-${sonar}`], flash: result[`antigravity-${flash}`] }
+        return { pro: result[`antigravity-${pro}`], flash: result[`antigravity-${flash}`] }
       }
       const a = await discover("A")
-      expect(Object.keys(a.sonar!.variants ?? {})).toEqual(["low", "medium", "high"])
+      expect(Object.keys(a.pro!.variants ?? {})).toEqual(["low", "high"])
       const b = await discover("B")
-      expect(b.sonar).toBeUndefined()
+      expect(b.pro).toBeUndefined()
       expect(b.flash?.variants).toBeUndefined()
       expect(b.flash?.capabilities).toMatchObject({ reasoning: false })
       offline = true
       expect(await discover("A")).toEqual(a)
       expect(await discover("B")).toEqual(b)
-      expect((await discover("A", "other")).sonar).toBeUndefined()
+      expect((await discover("A", "other")).pro).toBeUndefined()
       offline = false
       empty = true
-      expect(await discover("A")).toEqual({ sonar: undefined, flash: undefined })
+      expect(await discover("A")).toEqual({ pro: undefined, flash: undefined })
       offline = true
-      expect(await discover("A")).toEqual({ sonar: undefined, flash: undefined })
+      expect(await discover("A")).toEqual({ pro: undefined, flash: undefined })
     } finally { vi.unstubAllGlobals() }
   })
   it("returns runtime-shaped discovered models with static fallback", async () => {

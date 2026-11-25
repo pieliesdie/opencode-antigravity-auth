@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.1] - 2026-11-25
+
+### Removed
+
+- **Gemini 4 Hydrogen Sonar** - Removed `gemini-4-hydrogen-sonar` and all associated discovery, routing, API-key gating, thinking-level, and request-handling special cases.
+
 ## [2.1.0] - 2026-11-24
 
 ### Added

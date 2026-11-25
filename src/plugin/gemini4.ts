@@ -1,7 +1,7 @@
 import type { AntigravityAvailableModels } from "./config/models.ts"
 
 export const GEMINI4_MODELS = [
-  "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon", "gemini-4-hydrogen-sonar",
+  "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon",
 ] as const
 type ModelId = typeof GEMINI4_MODELS[number]
 type Level = "low" | "medium" | "high" | "xhigh"
@@ -17,7 +17,7 @@ export function gemini4Model(id: string | undefined | null) {
 }
 
 export function gemini4Levels(model: ModelId): Level[] {
-  return model === "gemini-4-argon" || model === "gemini-4-hydrogen-sonar"
+  return model === "gemini-4-argon"
     ? ["low", "medium", "high"]
     : ["low", "medium", "high", "xhigh"]
 }
@@ -49,25 +49,17 @@ const GEMINI4_MODEL_ENUMS: Partial<Record<ModelId, Partial<Record<Level, string>
     high: "MODEL_PLACEHOLDER_M532",
     xhigh: "MODEL_PLACEHOLDER_M535",
   },
-  "gemini-4-hydrogen-sonar": {
-    low: "MODEL_PLACEHOLDER_M578",
-    medium: "MODEL_PLACEHOLDER_M578",
-    high: "MODEL_PLACEHOLDER_M578",
-  },
 }
 
 export function gemini4WireTier(model: ModelId, requested?: string) {
-  const defaultLevel: Level = model === "gemini-4-hydrogen-sonar" ? "low" : "high"
-  const raw = (requested ?? defaultLevel).toLowerCase()
+  const raw = (requested ?? "high").toLowerCase()
   const normalized = raw === "minimal" ? "low" : raw
   const level = gemini4Levels(model).find(tier => tier === normalized)
   if (!level) throw new Gemini4Unavailable(`Unsupported ${model} thinking level: ${requested}`)
-  const backend = model === "gemini-4-hydrogen-sonar" ? model : `${model}-${level}`
-  return { level, backend, thinkingLevel: level.toUpperCase(), modelEnum: GEMINI4_MODEL_ENUMS[model]?.[level] }
+  return { level, backend: `${model}-${level}`, thinkingLevel: level.toUpperCase(), modelEnum: GEMINI4_MODEL_ENUMS[model]?.[level] }
 }
 
-/** The registry key is the wire ID; modelName can identify the public family.
- * In particular a Sonar key remains Sonar even when labelled Hydrogen. */
+/** The registry key is the wire ID; modelName can identify the public family. */
 export function gemini4Routes(registry: AntigravityAvailableModels) {
   const routes = new Map<ModelId, Gemini4Route[]>()
   for (const [sourceId, entry] of Object.entries(registry)) {

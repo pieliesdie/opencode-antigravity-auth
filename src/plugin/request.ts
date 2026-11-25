@@ -1034,10 +1034,7 @@ function ensureDefaultGemini3ThinkingLevel(
     thinkingConfig.thinkingLevel =
       thinkingLevel ?? getDefaultGemini3ThinkingLevel(effectiveModel);
   }
-  if (effectiveModel === "gemini-4-hydrogen-sonar") {
-    const level = String(thinkingConfig.thinkingLevel).toUpperCase()
-    thinkingConfig.thinkingLevel = level === "MEDIUM" || level === "HIGH" ? level : "LOW"
-  } else if (
+  if (
     /^gemini-4-argon-(?:low|medium|high)$/i.test(effectiveModel) &&
     thinkingConfig.thinkingLevel === "minimal"
   ) {

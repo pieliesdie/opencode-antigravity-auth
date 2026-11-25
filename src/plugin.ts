@@ -2606,8 +2606,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   if (fallback && !(fallback instanceof Gemini4CatalogResponse)) return fallback
                   return new Gemini4CatalogResponse(`${gemini4.model} is not listed as enabled for the current Antigravity account/project. ` +
                     (fallback ? "The configured Gemini API keys also do not list it." :
-                      gemini4.model.endsWith("-sonar") ? "Sonar requires Antigravity OAuth." :
-                        "Select an account that lists it, or configure a Gemini API key with access."))
+                      "Select an account that lists it, or configure a Gemini API key with access."))
                 }
               }
             }

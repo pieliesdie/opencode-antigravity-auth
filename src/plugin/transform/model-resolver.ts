@@ -247,7 +247,7 @@ export function getDefaultGemini3ThinkingLevel(model: string): string {
   const normalized = model.toLowerCase().replace(QUOTA_PREFIX_REGEX, "");
   const g4 = gemini4Model(normalized);
   if (g4) {
-    return g4.level ?? (g4.model === "gemini-4-hydrogen-sonar" ? "low" : "high");
+    return g4.level ?? "high";
   }
   if (/^gemini-3\.[678]-flash(?:-|$)/.test(normalized)) {
     return "medium";

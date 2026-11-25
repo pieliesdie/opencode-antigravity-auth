@@ -322,7 +322,6 @@ describe("AntigravityV2Plugin", () => {
         ...modelsFromAntigravityAvailableModels({
           "gemini-4-argon-low": {}, "gemini-4-argon-high": {},
           "gemini-4-carbon": {}, "gemini-4-neon": {}, "hydrogen-wire": { modelName: "gemini-4-hydrogen" },
-          "gemini-4-hydrogen-sonar": { modelName: "gemini-4-hydrogen" },
         }),
         ...modelsFromGeminiApi([{ name: "models/gemini-4-neon", supportedGenerationMethods: ["generateContent"] }]),
       }
@@ -346,14 +345,14 @@ describe("AntigravityV2Plugin", () => {
     expect(snapshots[0]).toMatchObject({
       "antigravity-gemini-4-argon": ["low", "high"], "antigravity-gemini-4-carbon": four,
       "antigravity-gemini-4-hydrogen": four, "antigravity-gemini-4-neon": four,
-      "antigravity-gemini-4-hydrogen-sonar": three, "gemini-4-neon": four,
+      "gemini-4-neon": four,
     })
     expect(Object.keys(snapshots[1]!).sort()).toEqual(["antigravity-gemini-4-neon", "host-model"])
     expect(snapshots[1]!["antigravity-gemini-4-neon"]).toEqual([])
     expect(snapshots[2]).toEqual(snapshots[0])
   })
   it("removes disabled models on A to B and restores them on B to A", async () => {
-    const sonar = "antigravity-gemini-4-hydrogen-sonar"
+    const argon = "antigravity-gemini-4-argon"
     const flash = "antigravity-gemini-3.8-flash"
     const legacy = buildLegacy({ loader: {}, authorization: { method: "auto", callback: async (): Promise<OAuthResult> => ({
       type: "success", refresh: "r", access: "a", expires: 1,
@@ -361,16 +360,16 @@ describe("AntigravityV2Plugin", () => {
     const credential = { type: "oauth" as const, refresh: "A", access: "A", expires: Date.now() + 3_600_000 }
     legacy.provider.models = async (_provider, ctx) => {
       const a = ctx.auth?.type === "oauth" && ctx.auth.refresh === "A"
-      ctx.onUnavailable?.(new Set(a ? [] : [sonar]))
+      ctx.onUnavailable?.(new Set(a ? [] : [argon]))
       const models: Record<string, ProviderModel> = { [flash]: { variants: a ? { high: { thinkingLevel: "high" } } : {} } }
-      if (a) models[sonar] = { name: "Sonar" }
+      if (a) models[argon] = { name: "Argon" }
       return models
     }
     core.create.mockReturnValue(async () => legacy)
     core.loadConfig.mockReturnValue({ session_recovery: false })
     const snapshots: Array<[boolean, string[], boolean]> = []
-    const { context, providerModels } = createContext({ credential, existingModels: [providerModel("public-model"), providerModel(sonar)] })
-    const record = () => snapshots.push([providerModels.some(m => m.id === sonar),
+    const { context, providerModels } = createContext({ credential, existingModels: [providerModel("public-model"), providerModel(argon)] })
+    const record = () => snapshots.push([providerModels.some(m => m.id === argon),
       providerModels.find(m => m.id === flash)!.variants.map(v => String(v.id)), providerModels.some(m => m.id === "public-model")])
     context.event.subscribe = async function* () {
       record()

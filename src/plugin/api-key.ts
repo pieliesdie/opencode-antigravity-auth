@@ -8,7 +8,7 @@ import {
   sanitizeGeminiGenerationConfigForModel,
 } from "./transform";
 import { getPublicGeminiApiModelIds } from "./model-catalog";
-import { Gemini4CatalogResponse, gemini4Model } from "./gemini4.ts"
+import { gemini4Model } from "./gemini4.ts"
 import type { AntigravityConfig } from "./config";
 import type { GeminiApiModel } from "./config/models";
 import type { ApiKeyAuthDetails } from "./types";
@@ -176,7 +176,6 @@ export function isApiKeyAuth(auth: unknown): auth is ApiKeyAuthDetails {
  */
 function canRouteAsPublicGeminiApiModel(model: string): boolean {
   const m = model.toLowerCase();
-  if (gemini4Model(m)?.model === "gemini-4-hydrogen-sonar") return false
   if (m.includes("claude")) return false;
   const isAntigravityPrefixed = m.startsWith("antigravity-");
   const stripped = m.replace(/^antigravity-/, "").replace(/-(minimal|low|medium|high)$/, "");
@@ -306,7 +305,6 @@ const ANTIGRAVITY_ONLY_BARE_GEMINI_IDS: ReadonlySet<string> = new Set([
  */
 export function isLikelyAntigravityOnlyModel(model: string): boolean {
   const m = model.toLowerCase();
-  if (gemini4Model(m)?.model === "gemini-4-hydrogen-sonar") return true
   if (m.startsWith("antigravity-")) return true;
   if (m.includes("claude")) return true;
   return ANTIGRAVITY_ONLY_BARE_GEMINI_IDS.has(m);
@@ -425,9 +423,6 @@ export async function enhanceAgySdkErrorResponse(
  * `AI_APICallError` carrying the actionable message.
  */
 export function createAntigravityOnlyModelErrorResponse(requestedModel: string): Response {
-  if (gemini4Model(requestedModel)?.model === "gemini-4-hydrogen-sonar") {
-    return new Gemini4CatalogResponse(`${requestedModel} requires an Antigravity OAuth account that lists Hydrogen Sonar.`)
-  }
   const body: GeminiErrorBody = {
     error: {
       code: 404,

@@ -310,7 +310,6 @@ export function modelsFromGeminiApi(models: GeminiApiModel[]): OpencodeModelDefi
     if (!supportsGeminiGeneration(model)) continue;
     const modelId = modelIdFromGeminiName(model.name) || model.baseModelId;
     if (!modelId) continue;
-    if (gemini4Model(modelId)?.model === "gemini-4-hydrogen-sonar") continue
 
     const variants = defaultVariantsForModel(modelId);
     const discovered: OpencodeModelDefinition = {
@@ -403,7 +402,7 @@ export function modelsFromAntigravityAvailableModels(
       name: `${displayName || titleFromModelId(model)} (Antigravity)`,
       limit: OPENCODE_MODEL_DEFINITIONS[id]?.limit ?? defaultLimitForModel(model),
       modalities: DEFAULT_MODALITIES,
-      ...(model === "gemini-4-hydrogen-sonar" || model === "gemini-4-argon" ? { temperature: false } : {}),
+      ...(model === "gemini-4-argon" ? { temperature: false } : {}),
       ...(levels.length
         ? { variants: Object.fromEntries(levels.map(thinkingLevel => [thinkingLevel, { thinkingLevel }])) }
         : { variants: undefined, supportsThinking: false }),

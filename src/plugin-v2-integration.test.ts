@@ -153,14 +153,13 @@ describe("Antigravity transport through @ai-sdk/google", () => {
     ["carbon", "xhigh", "carbon-backend-v2"],
     ["hydrogen", "xhigh", "hydrogen-backend-v2"],
     ["neon", "xhigh", "neon-backend-v2"],
-    ["hydrogen-sonar", "low", "gemini-4-hydrogen-sonar"],
   ] as const)("sends %s to its discovered OAuth backend at %s", async (name, level, backend) => {
     const model = `gemini-4-${name}`
     const sent: Array<{ id: string; level: string; token: string | null }> = []
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, options?: RequestInit) => {
       const url = requestUrl(input)
       if (url.includes("fetchAvailableModels")) return Response.json({ models: {
-        [backend]: { modelName: name === "hydrogen-sonar" ? "gemini-4-hydrogen" : model },
+        [backend]: { modelName: model },
       } })
       if (!url.includes(":generateContent")) return new Response("1.0.0")
       const body = JSON.parse(String(options?.body))
@@ -195,13 +194,13 @@ describe("Antigravity transport through @ai-sdk/google", () => {
     },
   )
 
-  it("reports unavailable Neon before generation without substituting Hydrogen Sonar or Argon", async () => {
+  it("reports unavailable Neon and Hydrogen before generation without substituting Argon", async () => {
     const posts: string[] = []
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = requestUrl(input)
       if (url.includes(":generateContent")) posts.push(url)
       if (url.includes("fetchAvailableModels")) return Response.json({ models: {
-        "gemini-4-neon": { disabled: true }, "gemini-4-hydrogen-sonar": { modelName: "gemini-4-hydrogen" }, "gemini-4-argon": {},
+        "gemini-4-neon": { disabled: true }, "gemini-4-argon": {},
       } })
       return new Response("1.0.0")
     })
