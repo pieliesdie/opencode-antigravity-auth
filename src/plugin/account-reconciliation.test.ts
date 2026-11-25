@@ -97,4 +97,24 @@ describe("V2 account eligibility across isolated server and TUI state", () => {
     expect(server.getCurrentOrNextForFamily("claude")?.parts.refreshToken).toBe("second")
     expect(server.getAccounts()[0]?.verificationRequired).toBe(true)
   })
+
+  it("picks up newly added accounts written externally by the V2 TUI without restarting", async () => {
+    const server = await setup()
+    await saveAccounts({
+      version: 4,
+      activeIndex: 0,
+      accounts: [
+        { refreshToken: "first", email: "a@example.com", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "second", email: "b@example.com", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "third", email: "c@example.com", addedAt: 2, lastUsed: 0 },
+      ],
+    })
+    server.reconcileEligibility(await loadAccounts())
+    expect(server.getAccountCount()).toBe(3)
+    expect(server.getAccounts().map((acc) => acc.email)).toEqual([
+      "a@example.com",
+      "b@example.com",
+      "c@example.com",
+    ])
+  })
 })

@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
-  load: vi.fn(), remove: vi.fn(), replace: vi.fn(), update: vi.fn(), quota: vi.fn(), verify: vi.fn(), configure: vi.fn(),
+  load: vi.fn(), save: vi.fn(), remove: vi.fn(), replace: vi.fn(), update: vi.fn(), quota: vi.fn(), verify: vi.fn(), configure: vi.fn(),
 }))
 vi.mock("./storage.ts", () => ({
-  loadAccounts: mocks.load, removeAccountFromStorage: mocks.remove,
+  loadAccounts: mocks.load, saveAccounts: mocks.save, removeAccountFromStorage: mocks.remove,
   replaceAccountInStorage: mocks.replace, updateAccountInStorage: mocks.update,
 }))
-vi.mock("./quota.ts", () => ({ checkAccountsQuota: mocks.quota }))
+vi.mock("./quota.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./quota.ts")>()
+  return { ...original, checkAccountsQuota: mocks.quota }
+})
 vi.mock("../plugin.ts", () => ({ verifyAccountAccess: mocks.verify }))
 vi.mock("./config/updater.ts", () => ({ updateV2ModelsConfig: mocks.configure }))
 
@@ -19,6 +22,7 @@ const pool = () => ({ version: 4 as const, accounts: [account("secret-a", "a@exa
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.load.mockResolvedValue(pool())
+  mocks.save.mockResolvedValue(undefined)
   mocks.remove.mockResolvedValue(true)
   mocks.replace.mockResolvedValue(undefined)
   mocks.update.mockResolvedValue(true)
@@ -95,5 +99,81 @@ describe("account administration backend", () => {
     expect(mocks.replace).not.toHaveBeenCalled()
     await admin.completeRefresh(admin.accounts[0]!.id, { refreshToken: "new", email: "a@example.com" })
     expect(mocks.replace).toHaveBeenCalledWith("secret-a", { refreshToken: "new", email: "a@example.com" })
+  })
+
+  it("displays, refreshes, and updates per-account model availability and manual allow/deny rules", async () => {
+    mocks.quota.mockResolvedValueOnce([
+      { status: "ok", availableModels: ["gemini-3-flash", "gemini-4-argon"], quota: { groups: {} } },
+    ])
+    const admin = await createAccountAdmin(client)
+    const id = admin.accounts[0]!.id
+
+    const refreshed = await admin.models([id], { refresh: true })
+    expect(refreshed).toContain("gemini-4-argon")
+    expect(mocks.update).toHaveBeenCalledWith("secret-a", expect.any(Function))
+
+    const updated = await admin.setModelRules([id], { deny: ["gemini-4-*"] })
+    expect(updated).toContain("deny=gemini-4-*")
+
+    const cleared = await admin.setModelRules([id], { clear: true })
+    expect(cleared).toContain("model rules cleared")
+  })
+
+  it("includes reset time and window hint in live quota output when resetTime is provided", async () => {
+    const now = Date.now()
+    mocks.quota.mockResolvedValueOnce([{
+      quota: {
+        groups: {
+          claude: { remainingFraction: 0.4, resetTime: new Date(now + 4 * 60 * 60 * 1000).toISOString(), modelCount: 1 },
+          gemini: { remainingFraction: 0.8, resetTime: new Date(now + 5 * 24 * 60 * 60 * 1000 + 60_000).toISOString(), modelCount: 1 },
+        },
+      },
+    }])
+    const admin = await createAccountAdmin(client)
+    const output = await admin.quotas([admin.accounts[0]!.id])
+    expect(output).toMatch(/claude: 40% \(resets in [^·]+\)/)
+    expect(output).toMatch(/gemini: 80% \(resets in 5d · weekly\)/)
+  })
+
+  it("renders separate 5h and weekly quota windows when retrieveUserQuotaSummary data is present", async () => {
+    const now = Date.now()
+    mocks.quota.mockResolvedValueOnce([{
+      quota: {
+        groups: {
+          claude: {
+            remainingFraction: 0.9,
+            modelCount: 2,
+            fiveHour: { remainingFraction: 1, resetTime: new Date(now + 4 * 60 * 60 * 1000 + 60_000).toISOString() },
+            weekly: { remainingFraction: 0.9, resetTime: new Date(now + 5 * 24 * 60 * 60 * 1000 + 60_000).toISOString() },
+          },
+          gemini: {
+            remainingFraction: 0.5,
+            modelCount: 3,
+            fiveHour: { remainingFraction: 0.5, resetTime: new Date(now + 3 * 60 * 60 * 1000 + 60_000).toISOString() },
+            weekly: { remainingFraction: 0.96, resetTime: new Date(now + 6 * 24 * 60 * 60 * 1000 + 60_000).toISOString() },
+          },
+        },
+      },
+    }])
+    const admin = await createAccountAdmin(client)
+    const output = await admin.quotas([admin.accounts[0]!.id])
+    expect(output).toContain("claude (5h): 100% (resets in 4h")
+    expect(output).toContain("claude (weekly): 90% (resets in 5d)")
+    expect(output).toContain("gemini (5h): 50% (resets in 3h")
+    expect(output).toContain("gemini (weekly): 96% (resets in 6d)")
+  })
+
+  it("persists a newly authenticated account via saveNewAccount without wiping existing accounts", async () => {
+    const admin = await createAccountAdmin(client)
+    const msg = await admin.saveNewAccount({
+      refreshToken: "secret-c",
+      email: "c@example.com",
+      projectId: "proj-c",
+    })
+    expect(msg).toContain("Added c@example.com")
+    expect(mocks.save).toHaveBeenCalledOnce()
+    const saved = mocks.save.mock.calls[0]![0]
+    expect(saved.accounts).toHaveLength(3)
+    expect(saved.accounts[2]).toMatchObject({ refreshToken: "secret-c", email: "c@example.com", projectId: "proj-c" })
   })
 })

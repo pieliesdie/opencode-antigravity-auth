@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.2.0] - 2026-11-25
+
+### Added
+
+- **Model-Aware Account Rotation** - Tracks per-account model availability automatically (from `fetchAvailableModels` and runtime `403`/`404` entitlement errors) alongside optional manual allow/deny rules in `antigravity.json` (`model_routing`) and `antigravity-accounts.json`.
+- **Independent Per-Model Sticky & Round-Robin Rotation** - Maintains independent sticky active accounts (`activeIndexByModel`) and round-robin cursors per model so switching between models preserves stickiness for other models.
+- **Multi-Account Model Discovery** - Aggregates `provider.models()` across all enabled OAuth accounts so models available on Pro/Ultra accounts appear in OpenCode regardless of which account is currently active.
+- **CLI & TUI Model Access Management** - Added `antigravity-accounts models [--refresh|allow|deny|clear]`, a **Model access & rules** menu in `/antigravity-accounts` (V2 TUI), and **Manage model access** in the V1 auth menu.
+- **In-Menu OAuth Sign-In & Scrollable Quotas (V2 TUI)** - Added interactive Google OAuth login (automatic browser callback and manual redirect paste) for adding and refreshing accounts directly inside `/antigravity-accounts`, live pool pickup without restarting OpenCode, and scrollable subgroup quota/model dialogs.
+- **5-Hour & Weekly Quota Support** - Added `v1internal:retrieveUserQuotaSummary` support (with automatic fallback to `fetchAvailableModels`), consolidated quotas into `claude` and `gemini` groups, and displayed both 5h and weekly limits with reset countdowns across `antigravity-accounts quota`, V2 TUI, and V1 CLI.
+
 ## [2.1.1] - 2026-11-25
 
 ### Removed

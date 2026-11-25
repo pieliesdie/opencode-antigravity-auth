@@ -47,7 +47,7 @@ import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackof
 import { createAutoUpdateCheckerHook } from "./hooks/auto-update-checker";
 import { loadConfig, initRuntimeConfig, type AntigravityConfig } from "./plugin/config";
 import { createSessionRecoveryHook, getRecoverySuccessToast } from "./plugin/recovery";
-import { checkAccountsQuota, fetchAvailableModels } from "./plugin/quota";
+import { checkAccountsQuota, fetchAvailableModels, formatQuotaResetSuffix } from "./plugin/quota";
 import { initDiskSignatureCache } from "./plugin/cache";
 import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "./plugin/refresh-queue";
 import { initLogger, createLogger } from "./plugin/logger";
@@ -81,6 +81,10 @@ import {
   recordAntigravityAvailableModels,
   recordPublicGeminiApiModels,
 } from "./plugin/model-catalog";
+import {
+  mergeAntigravityRegistries,
+  sanitizeModelPatterns,
+} from "./plugin/model-availability.ts";
 import type { AgySdkCredential } from "./plugin/api-key";
 import { GEMINI4_MODELS, Gemini4CatalogResponse, Gemini4Unavailable, gemini4Model, gemini4Routes, missingGemini4Credential, type Gemini4Route } from "./plugin/gemini4.ts"
 import { getPublicGenerationModelIds } from "./plugin/model-catalog.ts"
@@ -88,6 +92,7 @@ import type {
   AuthDetails,
   GetAuth,
   LoaderResult,
+  OAuthAuthDetails,
   PluginClient,
   PluginContext,
   PluginResult,
@@ -257,48 +262,147 @@ async function modelsFromAgySdkCredentials(
   return {};
 }
 
+interface OAuthDiscoveryTarget {
+  auth: OAuthAuthDetails;
+  accountIndex?: number;
+}
+
+async function fetchModelsForOAuthTarget(
+  target: OAuthDiscoveryTarget,
+  client: PluginClient,
+  providerId: string,
+  accountManager: AccountManager | null,
+): Promise<AntigravityAvailableModels | undefined> {
+  let effectiveAuth = target.auth;
+  let parts = parseRefreshParts(effectiveAuth.refresh);
+  const projectId = parts.managedProjectId || parts.projectId || ANTIGRAVITY_DEFAULT_PROJECT_ID;
+  try {
+    if (accessTokenExpired(effectiveAuth)) {
+      const refreshed = await refreshAccessToken(effectiveAuth, client, providerId);
+      if (refreshed) {
+        effectiveAuth = refreshed;
+        parts = parseRefreshParts(refreshed.refresh);
+        if (target.accountIndex !== undefined && accountManager) {
+          const acc = accountManager.getAccounts()[target.accountIndex];
+          if (acc) accountManager.updateFromAuth(acc, refreshed);
+        }
+      }
+    }
+    const accessToken = effectiveAuth.access;
+    if (!accessToken || accessTokenExpired(effectiveAuth)) {
+      return getCachedAntigravityAvailableModels(parts.refreshToken, projectId);
+    }
+    const response = await fetchAvailableModels(accessToken, projectId);
+    if (response.models) {
+      recordAntigravityAvailableModels(parts.refreshToken, projectId, response.models);
+      if (target.accountIndex !== undefined && accountManager) {
+        accountManager.updateAvailableModelsCache(target.accountIndex, response.models);
+      }
+    }
+    return response.models ?? getCachedAntigravityAvailableModels(parts.refreshToken, projectId);
+  } catch (error) {
+    log.debug("fetchAvailableModels-failed", { error: String(error) });
+    if (error instanceof AntigravityTokenRefreshError && error.code === "invalid_grant") return undefined;
+    return getCachedAntigravityAvailableModels(parts.refreshToken, projectId);
+  }
+}
+
 async function modelsFromOAuthAuth(
   config: AntigravityConfig,
   auth: AuthDetails | undefined,
   client: PluginClient,
   providerId: string,
+  accountManager: AccountManager | null,
 ): Promise<AntigravityAvailableModels | undefined> {
-  if (!config.model_discovery.enabled || !config.model_discovery.antigravity) return undefined
+  if (!config.model_discovery.enabled || !config.model_discovery.antigravity) return undefined;
 
-  let effectiveAuth = auth && isOAuthAuth(auth) ? auth : undefined;
-  if (!effectiveAuth && activeAccountManager) {
-    const accounts = activeAccountManager.getAccounts();
-    const activeAccount = accounts.find((a) => a.enabled !== false && a.parts?.refreshToken);
-    if (activeAccount) {
-      effectiveAuth = {
-        type: "oauth",
-        refresh: formatRefreshParts(activeAccount.parts),
-        access: activeAccount.access,
-        expires: activeAccount.expires,
-      };
+  const targets: OAuthDiscoveryTarget[] = [];
+  const seenTokens = new Set<string>();
+
+  if (accountManager) {
+    for (const acc of accountManager.getAccounts()) {
+      if (acc.enabled === false || !acc.parts?.refreshToken) continue;
+      if (seenTokens.has(acc.parts.refreshToken)) continue;
+      seenTokens.add(acc.parts.refreshToken);
+      const matchesPassedAuth =
+        auth && isOAuthAuth(auth) && parseRefreshParts(auth.refresh).refreshToken === acc.parts.refreshToken;
+      targets.push({
+        accountIndex: acc.index,
+        auth: {
+          type: "oauth",
+          refresh: formatRefreshParts(acc.parts),
+          access: acc.access ?? (matchesPassedAuth ? auth.access : undefined),
+          expires: acc.expires ?? (matchesPassedAuth ? auth.expires : undefined),
+        },
+      });
+    }
+  } else {
+    const stored = await loadAccounts().catch(() => null);
+    if (stored && stored.accounts.length > 0) {
+      for (const acc of stored.accounts) {
+        if (acc.enabled === false || !acc.refreshToken) continue;
+        if (seenTokens.has(acc.refreshToken)) continue;
+        seenTokens.add(acc.refreshToken);
+        const matchesPassedAuth =
+          auth && isOAuthAuth(auth) && parseRefreshParts(auth.refresh).refreshToken === acc.refreshToken;
+        targets.push({
+          auth: {
+            type: "oauth",
+            refresh: formatRefreshParts({
+              refreshToken: acc.refreshToken,
+              projectId: acc.projectId,
+              managedProjectId: acc.managedProjectId,
+            }),
+            access: matchesPassedAuth ? auth.access : undefined,
+            expires: matchesPassedAuth ? auth.expires : undefined,
+          },
+        });
+      }
     }
   }
 
-  if (!effectiveAuth) return undefined
-  let parts = parseRefreshParts(effectiveAuth.refresh);
-  const projectId = parts.managedProjectId || parts.projectId || ANTIGRAVITY_DEFAULT_PROJECT_ID;
-  try {
-    if (accessTokenExpired(effectiveAuth)) {
-      const refreshed = await refreshAccessToken(effectiveAuth, client, providerId)
-      if (refreshed) { effectiveAuth = refreshed; parts = parseRefreshParts(refreshed.refresh) }
+  if (auth && isOAuthAuth(auth)) {
+    const token = parseRefreshParts(auth.refresh).refreshToken;
+    if (token && !seenTokens.has(token)) {
+      seenTokens.add(token);
+      targets.unshift({ auth });
     }
-    const accessToken = effectiveAuth.access
-    if (!accessToken || accessTokenExpired(effectiveAuth)) return getCachedAntigravityAvailableModels(parts.refreshToken, projectId)
-    const response = await fetchAvailableModels(accessToken, projectId);
-    if (response.models) {
-      recordAntigravityAvailableModels(parts.refreshToken, projectId, response.models)
-    }
-    return response.models ?? getCachedAntigravityAvailableModels(parts.refreshToken, projectId)
-  } catch (error) {
-    log.debug("fetchAvailableModels-failed", { error: String(error) });
-    if (error instanceof AntigravityTokenRefreshError && error.code === "invalid_grant") return undefined
-    return getCachedAntigravityAvailableModels(parts.refreshToken, projectId)
   }
+
+  if (targets.length === 0) return undefined;
+
+  if (targets.length === 1) {
+    const result = await fetchModelsForOAuthTarget(targets[0]!, client, providerId, accountManager);
+    if (result && accountManager) {
+      accountManager.requestSaveToDisk();
+    }
+    return result;
+  }
+
+  // Query all enabled accounts with bounded concurrency so models available on
+  // any account (e.g. Ultra/Pro tiers) appear in OpenCode's model picker.
+  const DISCOVERY_CONCURRENCY = 3;
+  const registries: AntigravityAvailableModels[] = [];
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= targets.length) break;
+      const target = targets[idx];
+      if (!target) continue;
+      const result = await fetchModelsForOAuthTarget(target, client, providerId, accountManager);
+      if (result) registries.push(result);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(DISCOVERY_CONCURRENCY, targets.length) }, () => worker()),
+  );
+
+  if (registries.length === 0) return undefined;
+  if (accountManager) {
+    accountManager.requestSaveToDisk();
+  }
+  return mergeAntigravityRegistries(registries);
 }
 
 function hasProviderModelRuntimeShape(model: ProviderModel | undefined): boolean {
@@ -466,9 +570,19 @@ async function triggerAsyncQuotaRefreshForAccount(
     
     const results = await checkAccountsQuota([singleAccount], client, providerId);
     
-    if (results[0]?.status === "ok" && results[0]?.quota?.groups) {
-      accountManager.updateQuotaCache(accountIndex, results[0].quota.groups);
-      accountManager.requestSaveToDisk();
+    if (results[0]?.status === "ok") {
+      let updated = false;
+      if (results[0].quota?.groups) {
+        accountManager.updateQuotaCache(accountIndex, results[0].quota.groups);
+        updated = true;
+      }
+      if (results[0].availableModels !== undefined) {
+        accountManager.updateAvailableModelsCache(accountIndex, results[0].availableModels);
+        updated = true;
+      }
+      if (updated) {
+        accountManager.requestSaveToDisk();
+      }
     }
   } catch (err) {
     log.debug(`quota-refresh-failed email=${accountKey}`, { error: String(err) });
@@ -1689,6 +1803,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
   // Cached getAuth function for tool access
   let cachedGetAuth: GetAuth | null = null;
+  let instanceAccountManager: AccountManager | null = null;
   const refreshQueues = new Set<ProactiveRefreshQueue>();
   const oauthListeners = new Set<OAuthListener>();
   const loginLifetime = new AbortController()
@@ -1897,7 +2012,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
         }
         const [geminiResult, antigravityResult] = await Promise.allSettled([
           modelsFromAgySdkCredentials(config, auth),
-          modelsFromOAuthAuth(config, auth, client, providerId),
+          modelsFromOAuthAuth(config, auth, client, providerId, instanceAccountManager),
         ]);
 
         const geminiModels = geminiResult.status === "fulfilled" ? geminiResult.value : {};
@@ -2040,10 +2155,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
       
       // Note: AccountManager now ensures the current auth is always included in accounts
 
-      const accountManager = await AccountManager.loadFromDisk(auth);
+      const accountManager = await AccountManager.loadFromDisk(auth, config.model_routing);
       if (runtime === "v2" && initialAuthWasOAuth && authParts.refreshToken) {
         accountManager.setPreferredAccount(authParts.refreshToken);
       }
+      instanceAccountManager = accountManager;
       activeAccountManager = accountManager;
       if (accountManager.getAccountCount() > 0) {
         // A V2 OAuth credential can seed a new pool before the first disk save.
@@ -2285,13 +2401,67 @@ export const createAntigravityPlugin = (providerId: string) => async (
             );
 
             if (!account) {
-              // Every usable account was already tried (and switched away from)
-              // during THIS request. Nothing left to route to, so give up
-              // gracefully rather than waiting on accounts that won't recover
-              // mid-request (this is the case that previously spun forever for
-              // an Antigravity-only model whose antigravity pool is exhausted).
-              if (accountCount > 0 && triedSwitchIndices.size >= accountCount) {
-                // Terminal (last-resort) fallback: every account has been tried, so
+              const eligibleForModel = accountManager.getEligibleAccountsForModel(model);
+              if (eligibleForModel.length === 0) {
+                const unavailableFallback = await tryAgySdkFallbackForRequest(
+                  input,
+                  init,
+                  config,
+                  agySdkCredentials,
+                  urlString,
+                  Boolean(gemini4),
+                );
+                if (unavailableFallback && !(unavailableFallback instanceof Gemini4CatalogResponse)) {
+                  return unavailableFallback;
+                }
+                if (gemini4) {
+                  return new Gemini4CatalogResponse(
+                    `${gemini4.model} is not listed as enabled for any eligible Antigravity account/project. ` +
+                    (unavailableFallback
+                      ? "The configured Gemini API keys also do not list it."
+                      : "Select an account that lists it, or configure a Gemini API key with access."),
+                  );
+                }
+                if (lastFailure) {
+                  return transformAntigravityResponse(
+                    lastFailure.response,
+                    lastFailure.streaming,
+                    lastFailure.debugContext,
+                    lastFailure.requestedModel,
+                    lastFailure.projectId,
+                    lastFailure.endpoint,
+                    lastFailure.effectiveModel,
+                    lastFailure.sessionId,
+                    lastFailure.toolDebugMissing,
+                    lastFailure.toolDebugSummary,
+                    lastFailure.toolDebugPayload,
+                    debugLines,
+                  );
+                }
+                const modelLabel = model ?? family;
+                return new Response(
+                  JSON.stringify({
+                    error: {
+                      code: 404,
+                      status: "NOT_FOUND",
+                      message:
+                        `No enabled Antigravity account is eligible for model "${modelLabel}". ` +
+                        "Check account model availability or rules (`antigravity-accounts models`), or add an account with access.",
+                    },
+                  }),
+                  {
+                    status: 404,
+                    headers: { "content-type": "application/json" },
+                  },
+                );
+              }
+
+              // Every eligible account for this model was already tried (and switched
+              // away from) during THIS request. Nothing left to route to, so give up
+              // gracefully rather than waiting on accounts that won't recover mid-request.
+              const remainingEligible = accountManager.getEligibleAccountsForModel(model, triedSwitchIndices);
+              if (eligibleForModel.length > 0 && remainingEligible.length === 0) {
+                // Terminal (last-resort) fallback: every eligible account has been tried, so
                 // there is nothing left to rotate to. Intentionally UNguarded — we
                 // return whatever the SDK gives, even a retryable failure, as a
                 // bubble-able Response (project convention: return a Response rather
@@ -2315,7 +2485,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   );
                 }
                 throw lastError || new Error(
-                  `All ${accountCount} Antigravity account(s) are rate-limited for ${model ?? family}. ` +
+                  `All ${eligibleForModel.length} eligible Antigravity account(s) are rate-limited or unavailable for ${model ?? family}. ` +
                   "Run `opencode auth login` to add accounts or wait for quota reset.",
                 );
               }
@@ -2593,7 +2763,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
               if (!registry) {
                 try {
                   registry = (await waitForShared(fetchAvailableModels(accessToken, project), abortSignal)).models
-                  if (registry) recordAntigravityAvailableModels(token, project, registry)
+                  if (registry) {
+                    recordAntigravityAvailableModels(token, project, registry)
+                    accountManager.updateAvailableModelsCache(account.index, registry)
+                    accountManager.requestSaveToDisk()
+                  }
                 } catch (error) {
                   checkAborted()
                   log.debug("gemini4-oauth-discovery-failed", { error: String(error) })
@@ -2602,6 +2776,20 @@ export const createAntigravityPlugin = (providerId: string) => async (
               if (registry) {
                 discoveredRoutes = gemini4Routes(registry).get(gemini4.model)
                 if (!discoveredRoutes?.length) {
+                  accountManager.markModelUnavailable(account, gemini4.model)
+                  accountManager.requestSaveToDisk()
+                  const nextExcluded = new Set(triedSwitchIndices)
+                  nextExcluded.add(account.index)
+                  if (accountManager.hasEligibleAccountForModel(model, nextExcluded)) {
+                    pushDebug(`gemini4-unavailable-on-account idx=${account.index} model=${gemini4.model}; switching account`)
+                    const accountLabel = account.email || `Account ${account.index + 1}`
+                    await showToast(
+                      `${gemini4.model} is not available on ${accountLabel}. Trying another account...`,
+                      "info",
+                    )
+                    triedSwitchIndices.add(account.index)
+                    continue
+                  }
                   const fallback = await tryAgySdkFallbackForRequest(input, init, config, agySdkCredentials, urlString, true)
                   if (fallback && !(fallback instanceof Gemini4CatalogResponse)) return fallback
                   return new Gemini4CatalogResponse(`${gemini4.model} is not listed as enabled for the current Antigravity account/project. ` +
@@ -3083,27 +3271,35 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   continue;
                 }
 
-                // Non-retryable model-availability failure from the Antigravity backend.
-                // A 404 NOT_FOUND means this model isn't served for this account here
-                // (e.g. a Gemini id the Antigravity Code Assist backend doesn't expose).
-                // A 403 PERMISSION_DENIED with "Permission denied on resource project"
-                // means the resolved backend model id isn't entitled for this managed
-                // project (e.g. a staged Google rollout gate) — same practical effect as
-                // a 404 from the caller's perspective. In both cases retrying other
-                // endpoints or accounts can't help, but the public Gemini API (api-key
-                // path) may serve it. Fall back to the agy-sdk SDK/API path so a model
-                // that's unavailable on Antigravity but available via the API key still
-                // succeeds. This mirrors the 429 path, which already falls back.
-                // On fallback failure we LOG and return the (enhanced) error response
-                // instead of throwing, so OpenCode surfaces actionable guidance and the
-                // session/subagent continues.
-                //
-                // We deliberately do NOT fall back on other 403s: a generic 403 from the
-                // backend is a permission/credential signal (expired token, IP/ACL/
-                // verification denial), not "model unavailable". Falling back there would
-                // silently mask a real account-access problem and shift the user onto
-                // their API key unknowingly. The actionable 403 case (account
-                // verification) is handled above.
+                // Model-availability failure on this Antigravity account/project.
+                // A 404 NOT_FOUND or 403 PERMISSION_DENIED ("Permission denied on resource project")
+                // means this account/project isn't entitled to the requested model (e.g., tier/plan
+                // restriction or staged rollout). First record temporary per-model unavailability
+                // on this account and rotate to another eligible OAuth account if one exists.
+                // Only when no other OAuth account can serve the model do we fall back to the
+                // public Gemini API (agy-sdk path) or return the error response.
+                if (response.status === 404 || permissionDeniedOnProject) {
+                  if (model) {
+                    accountManager.markModelUnavailable(account, model);
+                    accountManager.requestSaveToDisk();
+                    const nextExcluded = new Set(triedSwitchIndices);
+                    nextExcluded.add(account.index);
+                    if (accountManager.hasEligibleAccountForModel(model, nextExcluded)) {
+                      pushDebug(
+                        `model-unavailable (${response.status}) on account ${account.index} for ${model}; switching account`,
+                      );
+                      const accountLabel = account.email || `Account ${account.index + 1}`;
+                      await showToast(
+                        `${model} unavailable on ${accountLabel}. Switching account...`,
+                        "info",
+                      );
+                      lastFailure = createFailureContext(response);
+                      shouldSwitchAccount = true;
+                      break;
+                    }
+                  }
+                }
+
                 if (
                   (response.status === 404 || permissionDeniedOnProject) &&
                   isAgySdkSupportedRequest(urlString)
@@ -3270,6 +3466,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                 checkAborted()
                 if (error instanceof Gemini4Unavailable) {
+                  if (model) {
+                    accountManager.markModelUnavailable(account, model);
+                    accountManager.requestSaveToDisk();
+                    const nextExcluded = new Set(triedSwitchIndices);
+                    nextExcluded.add(account.index);
+                    if (accountManager.hasEligibleAccountForModel(model, nextExcluded)) {
+                      pushDebug(`gemini4-tier-unavailable on account ${account.index} for ${model}; switching account`);
+                      shouldSwitchAccount = true;
+                      break;
+                    }
+                  }
                   return await tryAgySdkFallbackForRequest(input, init, config, agySdkCredentials, urlString) ?? error.response()
                 }
                 // Handle recoverable thinking errors - retry with forced recovery
@@ -3437,6 +3644,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     status,
                     isCurrentAccount: idx === (existingStorage.activeIndex ?? 0),
                     enabled: acc.enabled !== false,
+                    allowedModels: acc.allowedModels,
+                    disabledModels: acc.disabledModels,
+                    cachedAvailableModels: acc.cachedAvailableModels,
                   };
                 });
                 
@@ -3486,24 +3696,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       return `${bar} ${pct}`;
                     };
 
-                    // Helper to format reset time with days support
-                    const formatReset = (resetTime?: string): string => {
-                      if (!resetTime) return '';
-                      const ms = Date.parse(resetTime) - Date.now();
-                      if (ms <= 0) return ' (resetting...)';
-                      
-                      const hours = ms / (1000 * 60 * 60);
-                      if (hours >= 24) {
-                        const days = Math.floor(hours / 24);
-                        const remainingHours = Math.floor(hours % 24);
-                        if (remainingHours > 0) {
-                          return ` (resets in ${days}d ${remainingHours}h)`;
-                        }
-                        return ` (resets in ${days}d)`;
-                      }
-                      return ` (resets in ${formatWaitTime(ms)})`;
-                    };
-
                     const hasAntigravity = res.quota && Object.keys(res.quota.groups).length > 0;
                     console.log(`\n  └─ Antigravity Quota`);
                     if (!hasAntigravity) {
@@ -3511,29 +3703,66 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       console.log(`     └─ ${errorMsg}`);
                     } else {
                       const groups = res.quota!.groups;
-                      const groupEntries = [
-                        { name: "Claude", data: groups.claude },
-                        { name: "Gemini 3 Pro", data: groups["gemini-pro"] },
-                        { name: "Gemini 3 Flash", data: groups["gemini-flash"] },
-                      ].filter(g => g.data);
-                      
-                      groupEntries.forEach((g, idx) => {
-                        const isLast = idx === groupEntries.length - 1;
-                        const connector = isLast ? "└─" : "├─";
-                        const bar = createProgressBar(g.data!.remainingFraction);
-                        const reset = formatReset(g.data!.resetTime);
-                        const modelName = g.name.padEnd(29);
-                        console.log(`     ${connector} ${modelName} ${bar}${reset}`);
+                      const groupItems = [
+                        { label: "Claude", data: groups.claude },
+                        { label: "Gemini", data: groups.gemini },
+                      ].filter((g): g is { label: string; data: NonNullable<typeof g.data> } => Boolean(g.data));
+
+                      groupItems.forEach((g, idx) => {
+                        const isLastGroup = idx === groupItems.length - 1;
+                        const groupConnector = isLastGroup ? "└─" : "├─";
+                        const childPrefix = isLastGroup ? "   " : "│  ";
+                        const subEntries: Array<{ name: string; remainingFraction?: number; resetTime?: string }> = [];
+                        if (g.data.fiveHour) {
+                          subEntries.push({
+                            name: "5h",
+                            remainingFraction: g.data.fiveHour.remainingFraction,
+                            resetTime: g.data.fiveHour.resetTime,
+                          });
+                        }
+                        if (g.data.weekly) {
+                          subEntries.push({
+                            name: "weekly",
+                            remainingFraction: g.data.weekly.remainingFraction,
+                            resetTime: g.data.weekly.resetTime,
+                          });
+                        }
+
+                        if (subEntries.length > 0) {
+                          console.log(`     ${groupConnector} ${g.label}`);
+                          subEntries.forEach((sub, subIdx) => {
+                            const subConnector = subIdx === subEntries.length - 1 ? "└─" : "├─";
+                            const bar = createProgressBar(sub.remainingFraction);
+                            const reset = formatQuotaResetSuffix(sub.resetTime, Date.now(), {
+                              includeWeeklyTag: false,
+                            });
+                            const subLabel = sub.name.padEnd(26);
+                            console.log(`     ${childPrefix}${subConnector} ${subLabel} ${bar}${reset}`);
+                          });
+                        } else {
+                          const bar = createProgressBar(g.data.remainingFraction);
+                          const reset = formatQuotaResetSuffix(g.data.resetTime, Date.now(), {
+                            includeWeeklyTag: true,
+                          });
+                          const modelName = g.label.padEnd(29);
+                          console.log(`     ${groupConnector} ${modelName} ${bar}${reset}`);
+                        }
                       });
                     }
                     console.log("");
 
-                    // Cache quota data for soft quota protection
-                    if (res.quota?.groups) {
+                    // Cache quota and available models data for soft quota & model-aware routing
+                    if (res.quota?.groups || res.availableModels !== undefined) {
                       const acc = existingStorage.accounts[res.index];
                       if (acc) {
-                        acc.cachedQuota = res.quota.groups;
-                        acc.cachedQuotaUpdatedAt = Date.now();
+                        if (res.quota?.groups) {
+                          acc.cachedQuota = res.quota.groups;
+                          acc.cachedQuotaUpdatedAt = Date.now();
+                        }
+                        if (res.availableModels !== undefined) {
+                          acc.cachedAvailableModels = res.availableModels;
+                          acc.cachedAvailableModelsUpdatedAt = Date.now();
+                        }
                         storageUpdated = true;
                       }
                     }
@@ -3543,6 +3772,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
                         ...res.updatedAccount,
                         cachedQuota: res.quota?.groups,
                         cachedQuotaUpdatedAt: Date.now(),
+                        ...(res.availableModels !== undefined
+                          ? {
+                              cachedAvailableModels: res.availableModels,
+                              cachedAvailableModelsUpdatedAt: Date.now(),
+                            }
+                          : {}),
                       };
                       storageUpdated = true;
                     }
@@ -3569,6 +3804,61 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       console.log(`\nAccount ${acc.email || menuResult.toggleAccountIndex + 1} ${acc.enabled ? 'enabled' : 'disabled'}.\n`);
                       await pressEnterToContinue();
                     }
+                  }
+                  continue;
+                }
+
+                if (menuResult.mode === "models") {
+                  const accountIndex = menuResult.manageModelsAccountIndex;
+                  const acc = accountIndex !== undefined ? existingStorage.accounts[accountIndex] : undefined;
+                  if (acc && accountIndex !== undefined) {
+                    const label = acc.email || `Account ${accountIndex + 1}`;
+                    console.log(`\nModel access for ${label}:`);
+                    console.log(
+                      `  Cached available models: ${
+                        acc.cachedAvailableModels !== undefined
+                          ? (acc.cachedAvailableModels.length ? acc.cachedAvailableModels.join(", ") : "none")
+                          : "not cached yet (run Check quotas to refresh)"
+                      }`,
+                    );
+                    console.log(`  Allow list: ${acc.allowedModels?.length ? acc.allowedModels.join(", ") : "all (default)"}`);
+                    console.log(`  Deny list:  ${acc.disabledModels?.length ? acc.disabledModels.join(", ") : "none"}\n`);
+                    if (process.stdin.isTTY) {
+                      const actionInput = (await promptOAuthCallbackValue(
+                        "Choose: (a)llow list, (d)eny list, (c)lear rules, or Enter to go back: ",
+                      )).toLowerCase();
+                      if (actionInput === "a" || actionInput === "allow") {
+                        const raw = await promptOAuthCallbackValue("Comma-separated model IDs/patterns to ALLOW (empty to clear): ");
+                        const patterns = sanitizeModelPatterns(raw.split(",").map((s) => s.trim()).filter(Boolean));
+                        acc.allowedModels = patterns;
+                        acc.controlUpdatedAt = Math.max(Date.now(), (acc.controlUpdatedAt ?? 0) + 1);
+                        await saveAccounts(existingStorage);
+                        activeAccountManager?.setAccountModelRules(accountIndex, {
+                          allowedModels: acc.allowedModels,
+                          disabledModels: acc.disabledModels,
+                        });
+                        console.log(`\nUpdated allow list for ${label}.\n`);
+                      } else if (actionInput === "d" || actionInput === "deny") {
+                        const raw = await promptOAuthCallbackValue("Comma-separated model IDs/patterns to DENY (empty to clear): ");
+                        const patterns = sanitizeModelPatterns(raw.split(",").map((s) => s.trim()).filter(Boolean));
+                        acc.disabledModels = patterns;
+                        acc.controlUpdatedAt = Math.max(Date.now(), (acc.controlUpdatedAt ?? 0) + 1);
+                        await saveAccounts(existingStorage);
+                        activeAccountManager?.setAccountModelRules(accountIndex, {
+                          allowedModels: acc.allowedModels,
+                          disabledModels: acc.disabledModels,
+                        });
+                        console.log(`\nUpdated deny list for ${label}.\n`);
+                      } else if (actionInput === "c" || actionInput === "clear") {
+                        acc.allowedModels = undefined;
+                        acc.disabledModels = undefined;
+                        acc.controlUpdatedAt = Math.max(Date.now(), (acc.controlUpdatedAt ?? 0) + 1);
+                        await saveAccounts(existingStorage);
+                        activeAccountManager?.setAccountModelRules(accountIndex, {});
+                        console.log(`\nCleared manual model rules for ${label}.\n`);
+                      }
+                    }
+                    await pressEnterToContinue();
                   }
                   continue;
                 }

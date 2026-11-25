@@ -52,7 +52,7 @@ export async function promptAddAnotherAccount(currentCount: number): Promise<boo
   }
 }
 
-export type LoginMode = "add" | "fresh" | "manage" | "check" | "verify" | "verify-all" | "cancel";
+export type LoginMode = "add" | "fresh" | "manage" | "models" | "check" | "verify" | "verify-all" | "cancel";
 
 export interface ExistingAccountInfo {
   email?: string;
@@ -62,6 +62,9 @@ export interface ExistingAccountInfo {
   status?: AccountStatus;
   isCurrentAccount?: boolean;
   enabled?: boolean;
+  allowedModels?: string[];
+  disabledModels?: string[];
+  cachedAvailableModels?: string[];
 }
 
 export interface LoginMenuResult {
@@ -69,6 +72,7 @@ export interface LoginMenuResult {
   deleteAccountIndex?: number;
   refreshAccountIndex?: number;
   toggleAccountIndex?: number;
+  manageModelsAccountIndex?: number;
   verifyAccountIndex?: number;
   verifyAll?: boolean;
   deleteAll?: boolean;
@@ -127,6 +131,9 @@ export async function promptLoginMode(existingAccounts: ExistingAccountInfo[]): 
     status: acc.status,
     isCurrentAccount: acc.isCurrentAccount,
     enabled: acc.enabled,
+    allowedModels: acc.allowedModels,
+    disabledModels: acc.disabledModels,
+    cachedAvailableModels: acc.cachedAvailableModels,
   }));
 
   console.log("");
@@ -160,6 +167,9 @@ export async function promptLoginMode(existingAccounts: ExistingAccountInfo[]): 
         }
         if (accountAction === "verify") {
           return { mode: "verify", verifyAccountIndex: action.account.index };
+        }
+        if (accountAction === "models") {
+          return { mode: "models", manageModelsAccountIndex: action.account.index };
         }
         continue;
       }

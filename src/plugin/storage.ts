@@ -218,9 +218,27 @@ export interface AccountMetadataV3 {
   verificationRequiredReason?: string;
   verificationUrl?: string;
   /** Cached soft quota data */
-  cachedQuota?: Record<string, { remainingFraction?: number; resetTime?: string; modelCount: number }>;
+  cachedQuota?: Record<
+    string,
+    {
+      remainingFraction?: number;
+      resetTime?: string;
+      modelCount: number;
+      fiveHour?: { remainingFraction?: number; resetTime?: string };
+      weekly?: { remainingFraction?: number; resetTime?: string };
+    }
+  >;
   cachedQuotaUpdatedAt?: number;
-  /** Revision for enabled/verification fields; protects menu changes from stale manager saves. */
+  /** Optional manual model allowlist patterns for this account. */
+  allowedModels?: string[];
+  /** Optional manual model denylist patterns for this account. */
+  disabledModels?: string[];
+  /** Persisted cache of canonical model IDs reported available by fetchAvailableModels. */
+  cachedAvailableModels?: string[];
+  cachedAvailableModelsUpdatedAt?: number;
+  /** Runtime-learned per-model unavailability expiry timestamps (model -> epoch ms). */
+  unavailableModels?: Record<string, number>;
+  /** Revision for enabled/verification/model-rule fields; protects menu changes from stale manager saves. */
   controlUpdatedAt?: number;
 }
 
@@ -243,6 +261,8 @@ export interface AccountStorageV4 {
     claude?: number;
     gemini?: number;
   };
+  /** Per-model sticky active account indices (keyed by canonical model ID). */
+  activeIndexByModel?: Record<string, number>;
 }
 
 type AnyAccountStorage =
@@ -635,6 +655,57 @@ function maxDefined(a: number | undefined, b: number | undefined): number | unde
   return Math.max(a, b);
 }
 
+function mergeModelAvailabilityCache(
+  existing: AccountMetadataV3,
+  incoming: AccountMetadataV3,
+): Pick<
+  AccountMetadataV3,
+  "cachedAvailableModels" | "cachedAvailableModelsUpdatedAt" | "unavailableModels"
+> {
+  const now = Date.now();
+  const existingUpdatedAt = numericTimestamp(existing.cachedAvailableModelsUpdatedAt) ?? 0;
+  const incomingUpdatedAt = numericTimestamp(incoming.cachedAvailableModelsUpdatedAt) ?? 0;
+  const useIncomingCatalog =
+    incoming.cachedAvailableModels !== undefined &&
+    (existing.cachedAvailableModels === undefined || incomingUpdatedAt >= existingUpdatedAt);
+
+  const cachedAvailableModels = useIncomingCatalog
+    ? incoming.cachedAvailableModels
+    : existing.cachedAvailableModels;
+  const cachedAvailableModelsUpdatedAt = useIncomingCatalog
+    ? incoming.cachedAvailableModelsUpdatedAt
+    : existing.cachedAvailableModelsUpdatedAt;
+
+  const mergedUnavailable: Record<string, number> = {};
+  for (const source of [existing.unavailableModels, incoming.unavailableModels]) {
+    if (!source) continue;
+    for (const [model, until] of Object.entries(source)) {
+      if (typeof until !== "number" || !Number.isFinite(until) || until <= now) continue;
+      mergedUnavailable[model] = Math.max(mergedUnavailable[model] ?? 0, until);
+    }
+  }
+
+  // If the newer catalog explicitly reports a model as available, clear stale runtime unavailability
+  // that was recorded before the fresh catalog check.
+  if (cachedAvailableModels && cachedAvailableModelsUpdatedAt) {
+    const newestCatalogAt = Math.max(existingUpdatedAt, incomingUpdatedAt);
+    if (newestCatalogAt > 0) {
+      const availableSet = new Set(cachedAvailableModels);
+      for (const model of Object.keys(mergedUnavailable)) {
+        if (availableSet.has(model) && incoming.unavailableModels?.[model] === undefined && useIncomingCatalog) {
+          delete mergedUnavailable[model];
+        }
+      }
+    }
+  }
+
+  return {
+    cachedAvailableModels,
+    cachedAvailableModelsUpdatedAt,
+    unavailableModels: Object.keys(mergedUnavailable).length > 0 ? mergedUnavailable : undefined,
+  };
+}
+
 function mergeAccountStorage(
   existing: AccountStorageV4,
   incoming: AccountStorageV4,
@@ -665,11 +736,14 @@ function mergeAccountStorage(
           verificationRequiredAt: control.verificationRequiredAt,
           verificationRequiredReason: control.verificationRequiredReason,
           verificationUrl: control.verificationUrl,
+          allowedModels: control.allowedModels,
+          disabledModels: control.disabledModels,
           controlUpdatedAt: control.controlUpdatedAt,
           // Preserve manually configured projectId/managedProjectId if not in incoming
           projectId: acc.projectId ?? existingAcc.projectId,
           managedProjectId: acc.managedProjectId ?? existingAcc.managedProjectId,
           ...mergeRateLimitState(existingAcc, acc),
+          ...mergeModelAvailabilityCache(existingAcc, acc),
           lastUsed: Math.max(existingAcc.lastUsed || 0, acc.lastUsed || 0),
         });
       } else {
@@ -679,6 +753,11 @@ function mergeAccountStorage(
   }
 
   const accounts = Array.from(accountMap.values());
+  const activeIndexByModel = remapActiveIndexByModel(
+    incoming.activeIndexByModel ?? existing.activeIndexByModel,
+    incoming.activeIndexByModel ? incoming.accounts : existing.accounts,
+    accounts,
+  );
   return {
     version: 4,
     accounts,
@@ -688,6 +767,7 @@ function mergeAccountStorage(
       incoming.accounts,
       accounts,
     ),
+    ...(activeIndexByModel ? { activeIndexByModel } : {}),
     deletedRefreshTokenHashes: deletedRefreshTokenHashes.size > 0
       ? Array.from(deletedRefreshTokenHashes)
       : undefined,
@@ -827,6 +907,23 @@ function remapActiveIndexByFamily(
           ),
         }),
   };
+}
+
+function remapActiveIndexByModel(
+  activeIndexByModel: AccountStorageV4["activeIndexByModel"],
+  accounts: AccountMetadataV3[],
+  deduplicatedAccounts: AccountMetadataV3[],
+): AccountStorageV4["activeIndexByModel"] {
+  if (!activeIndexByModel || deduplicatedAccounts.length === 0) {
+    return undefined;
+  }
+
+  const remapped: Record<string, number> = {};
+  for (const [modelKey, index] of Object.entries(activeIndexByModel)) {
+    if (typeof index !== "number" || !Number.isFinite(index)) continue;
+    remapped[modelKey] = remapActiveIndex(accounts, deduplicatedAccounts, index);
+  }
+  return Object.keys(remapped).length > 0 ? remapped : undefined;
 }
 
 function migrateV1ToV2(v1: AccountStorageV1): AccountStorage {
@@ -994,6 +1091,12 @@ export async function loadAccounts(): Promise<AccountStorageV4 | null> {
       storage.activeIndex,
     );
 
+    const activeIndexByModel = remapActiveIndexByModel(
+      storage.activeIndexByModel,
+      validAccounts,
+      deduplicatedAccounts,
+    );
+
     return {
       version: 4,
       accounts: deduplicatedAccounts,
@@ -1006,6 +1109,7 @@ export async function loadAccounts(): Promise<AccountStorageV4 | null> {
         validAccounts,
         deduplicatedAccounts,
       ),
+      ...(activeIndexByModel ? { activeIndexByModel } : {}),
     };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -1072,6 +1176,12 @@ export async function removeAccountFromStorage(refreshToken: string): Promise<bo
     const deletedRefreshTokenHashes = new Set(existing.deletedRefreshTokenHashes ?? []);
     deletedRefreshTokenHashes.add(hashRefreshToken(refreshToken));
 
+    const activeIndexByModel = remapActiveIndexByModel(
+      existing.activeIndexByModel,
+      existing.accounts,
+      accounts,
+    );
+
     await writeAccountsAtomically(path, {
       version: 4,
       accounts,
@@ -1082,6 +1192,7 @@ export async function removeAccountFromStorage(refreshToken: string): Promise<bo
         existing.accounts,
         accounts,
       ),
+      ...(activeIndexByModel ? { activeIndexByModel } : {}),
     });
     return true;
   });
@@ -1200,6 +1311,11 @@ async function loadAccountsUnsafe(): Promise<AccountStorageV4 | null> {
 
 function remapDeduplicatedStorage(storage: AccountStorageV4): AccountStorageV4 {
   const deduplicatedAccounts = deduplicateAccountsByEmail(storage.accounts);
+  const activeIndexByModel = remapActiveIndexByModel(
+    storage.activeIndexByModel,
+    storage.accounts,
+    deduplicatedAccounts,
+  );
 
   return {
     ...storage,
@@ -1214,6 +1330,7 @@ function remapDeduplicatedStorage(storage: AccountStorageV4): AccountStorageV4 {
       storage.accounts,
       deduplicatedAccounts,
     ),
+    ...(activeIndexByModel ? { activeIndexByModel } : { activeIndexByModel: undefined }),
   };
 }
 

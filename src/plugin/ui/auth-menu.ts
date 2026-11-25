@@ -12,6 +12,9 @@ export interface AccountInfo {
   status?: AccountStatus;
   isCurrentAccount?: boolean;
   enabled?: boolean;
+  allowedModels?: string[];
+  disabledModels?: string[];
+  cachedAvailableModels?: string[];
 }
 
 export type AuthMenuAction =
@@ -24,7 +27,7 @@ export type AuthMenuAction =
   | { type: 'configure-models' }
   | { type: 'cancel' };
 
-export type AccountAction = 'back' | 'delete' | 'refresh' | 'toggle' | 'verify' | 'cancel';
+export type AccountAction = 'back' | 'delete' | 'refresh' | 'toggle' | 'verify' | 'models' | 'cancel';
 
 function formatRelativeTime(timestamp: number | undefined): string {
   if (!timestamp) return 'never';
@@ -112,11 +115,21 @@ export async function showAccountDetails(account: AccountInfo): Promise<AccountA
     `Added: ${formatDate(account.addedAt)}`,
     `Last used: ${formatRelativeTime(account.lastUsed)}`,
   ];
+  if (account.cachedAvailableModels !== undefined) {
+    subtitleParts.push(`Cached models: ${account.cachedAvailableModels.length}`);
+  }
+  if (account.allowedModels?.length) {
+    subtitleParts.push(`Allow: ${account.allowedModels.join(', ')}`);
+  }
+  if (account.disabledModels?.length) {
+    subtitleParts.push(`Deny: ${account.disabledModels.join(', ')}`);
+  }
 
   while (true) {
     const result = await select([
       { label: 'Back', value: 'back' as const },
       { label: 'Verify account access', value: 'verify' as const, color: 'cyan' },
+      { label: 'Manage model access', value: 'models' as const, color: 'cyan' },
       { label: account.enabled === false ? 'Enable account' : 'Disable account', value: 'toggle' as const, color: account.enabled === false ? 'green' : 'yellow' },
       { label: 'Refresh token', value: 'refresh' as const, color: 'cyan' },
       { label: 'Delete this account', value: 'delete' as const, color: 'red' },

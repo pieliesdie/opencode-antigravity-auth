@@ -105,6 +105,21 @@ function mergeConfigs(
           ...override.signature_cache,
         }
       : base.signature_cache,
+    // Deep merge model_routing so project overrides don't drop user rules
+    model_routing: override.model_routing
+      ? {
+          ...base.model_routing,
+          ...override.model_routing,
+          account_rules: {
+            ...base.model_routing.account_rules,
+            ...(override.model_routing.account_rules ?? {}),
+          },
+          model_accounts: {
+            ...base.model_routing.model_accounts,
+            ...(override.model_routing.model_accounts ?? {}),
+          },
+        }
+      : base.model_routing,
   };
 }
 

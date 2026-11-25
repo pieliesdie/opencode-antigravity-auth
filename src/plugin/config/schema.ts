@@ -76,6 +76,42 @@ export const ModelDiscoveryConfigSchema = z.object({
 });
 export type ModelDiscoveryConfig = z.infer<typeof ModelDiscoveryConfigSchema>;
 
+export const AccountModelRuleSchema = z.object({
+  /** Optional allowlist of model IDs or glob patterns (e.g. ["gemini-4-*", "claude-*"]). */
+  allow: z.array(z.string().trim().min(1)).optional(),
+  /** Optional denylist of model IDs or glob patterns (e.g. ["gemini-4-argon"]). */
+  deny: z.array(z.string().trim().min(1)).optional(),
+});
+export type AccountModelRule = z.infer<typeof AccountModelRuleSchema>;
+
+export const ModelAccountRoutingConfigSchema = z.object({
+  /**
+   * Per-account model allow/deny rules keyed by account email (case-insensitive)
+   * or 1-based account index string (e.g. "1", "2").
+   */
+  account_rules: z.record(z.string(), AccountModelRuleSchema).default({}),
+
+  /**
+   * Per-model allowed account selectors keyed by model ID or glob pattern
+   * (e.g. { "gemini-4-*": ["ultra@example.com"] }).
+   */
+  model_accounts: z.record(z.string(), z.array(z.string().trim().min(1))).default({}),
+
+  /**
+   * How long cached available models from fetchAvailableModels stay valid (in minutes).
+   * Set to 0 to disable automatic catalog-based filtering.
+   * @default 60
+   */
+  availability_cache_ttl_minutes: z.number().min(0).max(1440).default(60),
+
+  /**
+   * How long a model is marked unavailable on an account after a 403/404 entitlement error (in minutes).
+   * @default 30
+   */
+  unavailable_cooldown_minutes: z.number().min(1).max(1440).default(30),
+});
+export type ModelAccountRoutingConfig = z.infer<typeof ModelAccountRoutingConfigSchema>;
+
 /**
  * Signature cache configuration for persisting thinking block signatures to disk.
  */
@@ -338,6 +374,20 @@ export const AntigravityConfigSchema = z.object({
     gemini_api: true,
     antigravity: true,
   }),
+
+  /**
+   * Model-aware account routing and availability rules.
+   *
+   * Automatically tracks which models are available on each account (via
+   * `fetchAvailableModels` and runtime 403/404 entitlement responses) and supports
+   * optional manual per-account and per-model allow/deny rules.
+   */
+  model_routing: ModelAccountRoutingConfigSchema.default({
+    account_rules: {},
+    model_accounts: {},
+    availability_cache_ttl_minutes: 60,
+    unavailable_cooldown_minutes: 30,
+  }),
   
   /**
    * Strategy for selecting accounts when making requests.
@@ -527,6 +577,12 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
     enabled: true,
     gemini_api: true,
     antigravity: true,
+  },
+  model_routing: {
+    account_rules: {},
+    model_accounts: {},
+    availability_cache_ttl_minutes: 60,
+    unavailable_cooldown_minutes: 30,
   },
   account_selection_strategy: 'hybrid',
   pid_offset_enabled: false,

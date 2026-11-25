@@ -2,31 +2,72 @@ import {
   ANTIGRAVITY_CLI_USER_AGENT,
   ANTIGRAVITY_ENDPOINT,
   ANTIGRAVITY_ENDPOINT_PROD,
+  ANTIGRAVITY_HUB_USER_AGENT,
   ANTIGRAVITY_PROVIDER_ID,
 } from "../constants";
 import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./auth";
 import { logQuotaFetch, logQuotaStatus } from "./debug";
 import { ensureProjectContext } from "./project";
 import { refreshAccessToken } from "./token";
-import { getModelFamily, isGemini3OrLaterModel } from "./transform/model-resolver";
+import { isGemini3OrLaterModel } from "./transform/model-resolver";
 import { recordAntigravityAvailableModels } from "./model-catalog";
+import { extractAvailableModelsFromRegistry } from "./model-availability.ts";
 import type { PluginClient, OAuthAuthDetails } from "./types";
 import type { AccountMetadataV3 } from "./storage";
 
 const FETCH_TIMEOUT_MS = 10000;
 
-export type QuotaGroup = "claude" | "gemini-pro" | "gemini-flash";
+export type QuotaGroup = "claude" | "gemini";
+
+export interface QuotaWindowSummary {
+  remainingFraction?: number;
+  resetTime?: string;
+}
 
 export interface QuotaGroupSummary {
   remainingFraction?: number;
   resetTime?: string;
   modelCount: number;
+  /** Short-window (5h) quota bucket from retrieveUserQuotaSummary, when available. */
+  fiveHour?: QuotaWindowSummary;
+  /** Weekly quota bucket from retrieveUserQuotaSummary, when available. */
+  weekly?: QuotaWindowSummary;
 }
 
 export interface QuotaSummary {
   groups: Partial<Record<QuotaGroup, QuotaGroupSummary>>;
   modelCount: number;
   error?: string;
+}
+
+export interface UserQuotaSummaryBucket {
+  bucketId?: string;
+  modelId?: string;
+  displayName?: string;
+  window?: string;
+  remainingFraction?: number;
+  remainingPercent?: number;
+  usedFraction?: number;
+  resetTime?: string;
+  description?: string;
+}
+
+export interface UserQuotaSummaryGroup {
+  displayName?: string;
+  description?: string;
+  buckets?: UserQuotaSummaryBucket[];
+  quotaBuckets?: UserQuotaSummaryBucket[];
+}
+
+export interface RetrieveUserQuotaSummaryResponse {
+  response?: {
+    groups?: UserQuotaSummaryGroup[];
+    buckets?: UserQuotaSummaryBucket[];
+    quotaBuckets?: UserQuotaSummaryBucket[];
+  };
+  groups?: UserQuotaSummaryGroup[];
+  buckets?: UserQuotaSummaryBucket[];
+  quotaBuckets?: UserQuotaSummaryBucket[];
 }
 
 export type AccountQuotaStatus = "ok" | "disabled" | "error";
@@ -38,6 +79,8 @@ export interface AccountQuotaResult {
   error?: string;
   disabled?: boolean;
   quota?: QuotaSummary;
+  /** Canonical model IDs reported available by fetchAvailableModels for this account. */
+  availableModels?: string[];
   updatedAccount?: AccountMetadataV3;
 }
 
@@ -88,6 +131,78 @@ function parseResetTime(resetTime?: string): number | null {
   return timestamp;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Formats a quota reset timestamp into a concise suffix such as
+ * `" (resets in 4h 20m)"` or `" (resets in 5d 12h · weekly)"`.
+ * Returns `""` when `resetTime` is missing or unparseable.
+ */
+export function formatQuotaResetSuffix(
+  resetTime?: string,
+  now: number = Date.now(),
+  options?: { includeWeeklyTag?: boolean },
+): string {
+  const timestamp = parseResetTime(resetTime);
+  if (timestamp === null) return "";
+
+  const ms = timestamp - now;
+  if (ms <= 0) return " (resetting...)";
+
+  const totalSeconds = Math.ceil(ms / 1000);
+  let duration: string;
+  if (totalSeconds < 60) {
+    duration = `${totalSeconds}s`;
+  } else if (totalSeconds < 3600) {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    duration = seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  } else if (ms < DAY_MS) {
+    const totalMinutes = Math.floor(totalSeconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    duration = minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  } else {
+    const totalHours = Math.floor(ms / (60 * 60 * 1000));
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
+    duration = hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+
+  const includeWeeklyTag = options?.includeWeeklyTag ?? true;
+  const windowTag = includeWeeklyTag && ms > DAY_MS ? " · weekly" : "";
+
+  return ` (resets in ${duration}${windowTag})`;
+}
+
+/**
+ * Formats a quota group as one or more subgroup entries.
+ * When separate 5h and/or weekly buckets are available from retrieveUserQuotaSummary,
+ * returns separate entries (`["claude (5h): 100% (resets in 4h)", "claude (weekly): 90% (resets in 5d)"]`).
+ * Otherwise falls back to a single aggregate entry (`["claude: 50% (resets in 4h)"]`).
+ */
+export function formatQuotaGroupEntries(
+  groupName: string,
+  quota: QuotaGroupSummary,
+  now: number = Date.now(),
+): string[] {
+  const entries: string[] = [];
+  if (quota.fiveHour?.remainingFraction !== undefined) {
+    const pct = Math.round(quota.fiveHour.remainingFraction * 100);
+    const reset = formatQuotaResetSuffix(quota.fiveHour.resetTime, now, { includeWeeklyTag: false });
+    entries.push(`${groupName} (5h): ${pct}%${reset}`);
+  }
+  if (quota.weekly?.remainingFraction !== undefined) {
+    const pct = Math.round(quota.weekly.remainingFraction * 100);
+    const reset = formatQuotaResetSuffix(quota.weekly.resetTime, now, { includeWeeklyTag: false });
+    entries.push(`${groupName} (weekly): ${pct}%${reset}`);
+  }
+  if (entries.length > 0) {
+    return entries;
+  }
+  return [`${groupName}: ${Math.round((quota.remainingFraction ?? 0) * 100)}%${formatQuotaResetSuffix(quota.resetTime, now)}`];
+}
+
 function classifyQuotaGroup(modelName: string, displayName?: string): QuotaGroup | null {
   const combined = `${modelName} ${displayName ?? ""}`.toLowerCase();
   if (combined.includes("claude")) {
@@ -97,8 +212,7 @@ function classifyQuotaGroup(modelName: string, displayName?: string): QuotaGroup
   if (!isGemini3) {
     return null;
   }
-  const family = getModelFamily(modelName);
-  return family === "gemini-flash" ? "gemini-flash" : "gemini-pro";
+  return "gemini";
 }
 
 function aggregateQuota(models?: Record<string, FetchAvailableModelEntry>): QuotaSummary {
@@ -109,6 +223,9 @@ function aggregateQuota(models?: Record<string, FetchAvailableModelEntry>): Quot
 
   let totalCount = 0;
   for (const [modelName, entry] of Object.entries(models)) {
+    if (entry.disabled === true) {
+      continue;
+    }
     const group = classifyQuotaGroup(modelName, entry.displayName ?? entry.modelName);
     if (!group) {
       continue;
@@ -174,6 +291,189 @@ function aggregateQuota(models?: Record<string, FetchAvailableModelEntry>): Quot
   return { groups, modelCount: totalCount };
 }
 
+type QuotaWindowKind = "fiveHour" | "weekly";
+
+const PRIMARY_BUCKET_IDS = new Set([
+  "gemini-5h",
+  "gemini-weekly",
+  "3p-5h",
+  "3p-weekly",
+  "claude-5h",
+  "claude-weekly",
+]);
+
+function classifySummaryBucketGroup(
+  bucket: UserQuotaSummaryBucket,
+  groupDisplayName?: string,
+): QuotaGroup | null {
+  const bucketId = (bucket.bucketId ?? "").toLowerCase();
+  const groupName = (groupDisplayName ?? "").toLowerCase();
+  const combined = `${bucketId} ${groupName} ${(bucket.displayName ?? "").toLowerCase()}`;
+
+  if (
+    bucketId.startsWith("3p") ||
+    bucketId.includes("claude") ||
+    groupName.includes("claude") ||
+    groupName.includes("3p") ||
+    combined.includes("claude")
+  ) {
+    return "claude";
+  }
+  if (bucketId.includes("gemini") || groupName.includes("gemini")) {
+    return "gemini";
+  }
+  return null;
+}
+
+function classifySummaryBucketWindow(bucket: UserQuotaSummaryBucket): QuotaWindowKind | null {
+  const windowStr = (bucket.window ?? "").toLowerCase();
+  const bucketId = (bucket.bucketId ?? "").toLowerCase();
+  const displayName = (bucket.displayName ?? "").toLowerCase();
+
+  if (windowStr === "weekly" || windowStr.includes("week") || bucketId.includes("weekly") || displayName.includes("weekly")) {
+    return "weekly";
+  }
+  if (
+    windowStr === "5h" ||
+    windowStr.includes("5h") ||
+    bucketId.includes("5h") ||
+    displayName.includes("five hour") ||
+    displayName.includes("5 hour") ||
+    displayName.includes("5h")
+  ) {
+    return "fiveHour";
+  }
+  return null;
+}
+
+function extractBucketRemainingFraction(bucket: UserQuotaSummaryBucket): number | undefined {
+  if (typeof bucket.remainingFraction === "number" && Number.isFinite(bucket.remainingFraction)) {
+    return normalizeRemainingFraction(bucket.remainingFraction);
+  }
+  if (typeof bucket.remainingPercent === "number" && Number.isFinite(bucket.remainingPercent)) {
+    return normalizeRemainingFraction(bucket.remainingPercent > 1 ? bucket.remainingPercent / 100 : bucket.remainingPercent);
+  }
+  if (typeof bucket.usedFraction === "number" && Number.isFinite(bucket.usedFraction)) {
+    return normalizeRemainingFraction(1 - bucket.usedFraction);
+  }
+  return undefined;
+}
+
+function aggregateUserQuotaSummary(
+  payload?: RetrieveUserQuotaSummaryResponse,
+): Partial<Record<QuotaGroup, { fiveHour?: QuotaWindowSummary; weekly?: QuotaWindowSummary }>> {
+  const out: Partial<Record<QuotaGroup, { fiveHour?: QuotaWindowSummary; weekly?: QuotaWindowSummary }>> = {};
+  if (!payload) return out;
+
+  const root = payload.response ?? payload;
+  const entries: Array<{ bucket: UserQuotaSummaryBucket; groupDisplayName?: string }> = [];
+
+  for (const group of root.groups ?? []) {
+    for (const bucket of group.buckets ?? group.quotaBuckets ?? []) {
+      entries.push({ bucket, groupDisplayName: group.displayName });
+    }
+  }
+  for (const bucket of root.buckets ?? root.quotaBuckets ?? []) {
+    entries.push({ bucket });
+  }
+
+  // Track whether the chosen bucket for each (group, window) is a primary bucket id
+  // so specialized sub-buckets (e.g. gemini-argon-wtu-weekly) don't overwrite gemini-weekly.
+  const isPrimarySelected: Partial<Record<QuotaGroup, Partial<Record<QuotaWindowKind, boolean>>>> = {};
+
+  for (const { bucket, groupDisplayName } of entries) {
+    const group = classifySummaryBucketGroup(bucket, groupDisplayName);
+    const windowKind = classifySummaryBucketWindow(bucket);
+    if (!group || !windowKind) continue;
+    const remainingFraction = extractBucketRemainingFraction(bucket);
+    if (remainingFraction === undefined) {
+      continue;
+    }
+
+    const resetTimestamp = parseResetTime(bucket.resetTime);
+    const validResetTime = resetTimestamp !== null ? bucket.resetTime : undefined;
+    const isPrimary = PRIMARY_BUCKET_IDS.has((bucket.bucketId ?? "").toLowerCase());
+
+    const groupEntry = out[group] ?? (out[group] = {});
+    const primaryFlags = isPrimarySelected[group] ?? (isPrimarySelected[group] = {});
+    const existing = groupEntry[windowKind];
+    const existingIsPrimary = primaryFlags[windowKind] === true;
+
+    let shouldReplace = false;
+    if (!existing) {
+      shouldReplace = true;
+    } else if (isPrimary && !existingIsPrimary) {
+      shouldReplace = true;
+    } else if (isPrimary === existingIsPrimary) {
+      // Among equal-priority buckets, prefer the lower (more used / active) remainingFraction
+      // so an unused sibling bucket at 100% does not mask actual consumption.
+      if (
+        existing.remainingFraction === undefined ||
+        remainingFraction < existing.remainingFraction
+      ) {
+        shouldReplace = true;
+      } else if (remainingFraction === existing.remainingFraction && resetTimestamp !== null) {
+        const existingResetTimestamp = parseResetTime(existing.resetTime);
+        if (existingResetTimestamp === null || resetTimestamp < existingResetTimestamp) {
+          shouldReplace = true;
+        }
+      }
+    }
+
+    if (shouldReplace) {
+      groupEntry[windowKind] = {
+        remainingFraction,
+        resetTime: validResetTime,
+      };
+      primaryFlags[windowKind] = isPrimary;
+    }
+  }
+
+  return out;
+}
+
+function selectConstrainingWindow(
+  fiveHour?: QuotaWindowSummary,
+  weekly?: QuotaWindowSummary,
+): QuotaWindowSummary | undefined {
+  if (fiveHour && weekly) {
+    const f = fiveHour.remainingFraction ?? 1;
+    const w = weekly.remainingFraction ?? 1;
+    return w < f ? weekly : fiveHour;
+  }
+  return fiveHour ?? weekly;
+}
+
+function mergeQuotaWithSummary(
+  base: QuotaSummary,
+  summaryGroups: Partial<Record<QuotaGroup, { fiveHour?: QuotaWindowSummary; weekly?: QuotaWindowSummary }>>,
+): QuotaSummary {
+  const groups: Partial<Record<QuotaGroup, QuotaGroupSummary>> = { ...base.groups };
+
+  for (const group of ["claude", "gemini"] as QuotaGroup[]) {
+    const summary = summaryGroups[group];
+    if (!summary || (!summary.fiveHour && !summary.weekly)) continue;
+
+    const existing = groups[group];
+    const constraining = selectConstrainingWindow(summary.fiveHour, summary.weekly);
+
+    groups[group] = {
+      remainingFraction: constraining?.remainingFraction ?? existing?.remainingFraction,
+      resetTime: constraining?.resetTime ?? existing?.resetTime,
+      modelCount: existing?.modelCount ?? 0,
+      ...(summary.fiveHour ? { fiveHour: summary.fiveHour } : {}),
+      ...(summary.weekly ? { weekly: summary.weekly } : {}),
+    };
+  }
+
+  const hasGroups = Object.keys(groups).length > 0;
+  return {
+    groups,
+    modelCount: base.modelCount,
+    ...(hasGroups ? {} : base.error ? { error: base.error } : {}),
+  };
+}
+
 async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -188,6 +488,80 @@ const FETCH_AVAILABLE_MODELS_ENDPOINTS = [
   ANTIGRAVITY_ENDPOINT,
   ANTIGRAVITY_ENDPOINT_PROD,
 ] as const;
+
+// Query daily first (where Antigravity requests are served and live consumption is tracked),
+// then supplement/reconcile with prod (which reliably exposes both Gemini and 3p groups).
+const FETCH_USER_QUOTA_SUMMARY_ENDPOINTS = [
+  ANTIGRAVITY_ENDPOINT,
+  ANTIGRAVITY_ENDPOINT_PROD,
+] as const;
+
+function pickMoreAccurateWindow(
+  current: QuotaWindowSummary | undefined,
+  incoming: QuotaWindowSummary | undefined,
+): QuotaWindowSummary | undefined {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  const curFrac = current.remainingFraction;
+  const incFrac = incoming.remainingFraction;
+  if (curFrac === undefined) return incoming;
+  if (incFrac === undefined) return current;
+  // Prefer the lower (actually consumed) remainingFraction so a static 1.0 from a
+  // different gateway environment does not hide real usage.
+  if (incFrac < curFrac) return incoming;
+  if (incFrac === curFrac && !current.resetTime && incoming.resetTime) return incoming;
+  return current;
+}
+
+export async function fetchUserQuotaSummary(
+  accessToken: string,
+  projectId: string,
+): Promise<Partial<Record<QuotaGroup, { fiveHour?: QuotaWindowSummary; weekly?: QuotaWindowSummary }>>> {
+  const body = JSON.stringify(projectId ? { project: projectId } : {});
+  const merged: Partial<Record<QuotaGroup, { fiveHour?: QuotaWindowSummary; weekly?: QuotaWindowSummary }>> = {};
+
+  for (const endpoint of FETCH_USER_QUOTA_SUMMARY_ENDPOINTS) {
+    try {
+      const response = await fetchWithTimeout(`${endpoint}/v1internal:retrieveUserQuotaSummary`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "User-Agent": ANTIGRAVITY_HUB_USER_AGENT,
+        },
+        body,
+      });
+
+      if (!response.ok) {
+        const snippet = (await response.text().catch(() => "")).trim().slice(0, 160);
+        logQuotaFetch(
+          "error",
+          undefined,
+          `retrieveUserQuotaSummary ${response.status} at ${endpoint}${snippet ? `: ${snippet}` : ""}`,
+        );
+        continue;
+      }
+
+      const payload = (await response.json()) as RetrieveUserQuotaSummaryResponse;
+      const parsed = aggregateUserQuotaSummary(payload);
+      for (const group of ["claude", "gemini"] as QuotaGroup[]) {
+        const incoming = parsed[group];
+        if (!incoming) continue;
+        const current = merged[group] ?? (merged[group] = {});
+        current.fiveHour = pickMoreAccurateWindow(current.fiveHour, incoming.fiveHour);
+        current.weekly = pickMoreAccurateWindow(current.weekly, incoming.weekly);
+      }
+    } catch (error) {
+      logQuotaFetch(
+        "error",
+        undefined,
+        `retrieveUserQuotaSummary error at ${endpoint}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return merged;
+}
 
 export async function fetchAvailableModels(
   accessToken: string,
@@ -316,11 +690,18 @@ async function checkSingleAccountQuota(
     const updatedAccount = applyAccountUpdates(account, auth);
 
     let quotaResult: QuotaSummary;
+    let availableModels: string[] | undefined;
 
-    const antigravityResponse = await fetchAvailableModels(
-      auth.access ?? "",
-      projectContext.effectiveProjectId,
-    ).catch((): FetchAvailableModelsResponse => ({ models: undefined }));
+    const [antigravityResponse, summaryGroups] = await Promise.all([
+      fetchAvailableModels(
+        auth.access ?? "",
+        projectContext.effectiveProjectId,
+      ).catch((): FetchAvailableModelsResponse => ({ models: undefined })),
+      fetchUserQuotaSummary(
+        auth.access ?? "",
+        projectContext.effectiveProjectId,
+      ).catch(() => ({})),
+    ]);
 
     // Process Antigravity quota
     if (antigravityResponse.models === undefined) {
@@ -331,8 +712,11 @@ async function checkSingleAccountQuota(
       };
     } else {
       recordAntigravityAvailableModels(parseRefreshParts(auth.refresh).refreshToken, projectContext.effectiveProjectId, antigravityResponse.models)
+      availableModels = extractAvailableModelsFromRegistry(antigravityResponse.models).available
       quotaResult = aggregateQuota(antigravityResponse.models);
     }
+
+    quotaResult = mergeQuotaWithSummary(quotaResult, summaryGroups);
 
     // Log quota status for each family
     for (const [family, groupQuota] of Object.entries(quotaResult.groups)) {
@@ -346,6 +730,7 @@ async function checkSingleAccountQuota(
       status: "ok",
       disabled,
       quota: quotaResult,
+      ...(availableModels !== undefined ? { availableModels } : {}),
       updatedAccount,
     };
   } catch (error) {
@@ -386,5 +771,7 @@ export async function checkAccountsQuota(
 
 export const __testExports = {
   aggregateQuota,
+  aggregateUserQuotaSummary,
+  mergeQuotaWithSummary,
   mapWithConcurrency,
 }

@@ -1,13 +1,22 @@
 import { formatRefreshParts, parseRefreshParts } from "./auth";
 import { loadAccounts, removeAccountFromStorage, saveAccounts, saveAccountsReplace, type AccountStorageV4, type AccountMetadataV3, type RateLimitStateV3, type ModelFamily, type HeaderStyle, type CooldownReason } from "./storage";
 import type { OAuthAuthDetails, RefreshParts } from "./types";
-import type { AccountSelectionStrategy } from "./config/schema";
+import { DEFAULT_CONFIG, type AccountSelectionStrategy, type ModelAccountRoutingConfig } from "./config/schema";
+import type { AntigravityAvailableModels } from "./config/models";
 import { getHealthTracker, getTokenTracker, selectHybridAccount, type AccountWithMetrics } from "./rotation";
 import { generateFingerprint, updateFingerprintVersion, type Fingerprint, type FingerprintVersion, MAX_FINGERPRINT_HISTORY } from "./fingerprint";
 import type { QuotaGroup, QuotaGroupSummary } from "./quota";
 import { getModelFamily } from "./transform/model-resolver";
 import { debugLogToFile } from "./debug";
 import { formatAccountLabel } from "./logging-utils";
+import {
+  evaluateAccountModelEligibility,
+  extractAvailableModelsFromRegistry,
+  normalizeModelKey,
+  sanitizeModelPatterns,
+  sanitizeUnavailableModels,
+  type ModelIneligibilityReason,
+} from "./model-availability.ts";
 
 
 export type { ModelFamily, HeaderStyle, CooldownReason } from "./storage";
@@ -183,6 +192,15 @@ export interface ManagedAccount {
   /** Cached quota data from last checkAccountsQuota() call */
   cachedQuota?: Partial<Record<QuotaGroup, QuotaGroupSummary>>;
   cachedQuotaUpdatedAt?: number;
+  /** Optional manual model allowlist patterns for this account. */
+  allowedModels?: string[];
+  /** Optional manual model denylist patterns for this account. */
+  disabledModels?: string[];
+  /** Persisted cache of canonical model IDs reported available by fetchAvailableModels. */
+  cachedAvailableModels?: string[];
+  cachedAvailableModelsUpdatedAt?: number;
+  /** Runtime-learned per-model unavailability expiry timestamps (canonicalModel -> epoch ms). */
+  unavailableModels: Record<string, number>;
   controlUpdatedAt?: number;
   verificationRequired?: boolean;
   verificationRequiredAt?: number;
@@ -351,22 +369,50 @@ function sanitizeClearedSetTimes(
 }
 
 /**
- * Resolve the quota group for soft quota checks.
- * 
- * When a model string is available, we can precisely determine the quota group.
- * When model is null/undefined, we fall back based on family:
- * - Claude → "claude" quota group
- * - Gemini → "gemini-pro" (conservative fallback; may misclassify flash models)
- * 
- * @param family - The model family ("claude" | "gemini")
- * @param model - Optional model string for precise resolution
- * @returns The QuotaGroup to use for soft quota checks
+ * Resolve the quota group for soft quota checks ("claude" | "gemini").
  */
 export function resolveQuotaGroup(family: ModelFamily, model?: string | null): QuotaGroup {
   if (model) {
-    return getModelFamily(model);
+    return getModelFamily(model) === "claude" ? "claude" : "gemini";
   }
-  return family === "claude" ? "claude" : "gemini-pro";
+  return family === "claude" ? "claude" : "gemini";
+}
+
+function normalizeLegacyCachedQuota(
+  raw: Record<string, QuotaGroupSummary> | undefined,
+): Partial<Record<QuotaGroup, QuotaGroupSummary>> | undefined {
+  if (!raw) return undefined;
+  const out: Partial<Record<QuotaGroup, QuotaGroupSummary>> = {};
+  if (raw.claude) {
+    out.claude = raw.claude;
+  }
+  if (raw.gemini) {
+    out.gemini = raw.gemini;
+  } else {
+    const legacy = [raw["gemini-pro"], raw["gemini-flash"]].filter(
+      (entry): entry is QuotaGroupSummary => entry !== undefined,
+    );
+    if (legacy.length > 0) {
+      let best = legacy[0]!;
+      let totalModels = best.modelCount;
+      for (let i = 1; i < legacy.length; i++) {
+        const candidate = legacy[i]!;
+        totalModels += candidate.modelCount;
+        if (
+          candidate.remainingFraction !== undefined &&
+          (best.remainingFraction === undefined || candidate.remainingFraction > best.remainingFraction)
+        ) {
+          best = candidate;
+        }
+      }
+      out.gemini = {
+        remainingFraction: best.remainingFraction,
+        resetTime: best.resetTime,
+        modelCount: totalModels,
+      };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function isOverSoftQuotaThreshold(
@@ -427,14 +473,18 @@ export function computeSoftQuotaCacheTtlMs(
 export class AccountManager {
   private accounts: ManagedAccount[] = [];
   private cursor = 0;
+  private cursorByModel: Record<string, number> = {};
   private currentAccountIndexByFamily: Record<ModelFamily, number> = {
     claude: -1,
     gemini: -1,
   };
+  private currentAccountIndexByModel: Record<string, number> = {};
   private sessionOffsetApplied: Record<ModelFamily, boolean> = {
     claude: false,
     gemini: false,
   };
+  private sessionOffsetAppliedByModel: Record<string, boolean> = {};
+  private modelRoutingConfig: ModelAccountRoutingConfig = DEFAULT_CONFIG.model_routing;
   private lastToastAccountIndex = -1;
   private lastToastTime = 0;
 
@@ -447,12 +497,22 @@ export class AccountManager {
   private activeSave: Promise<void> | null = null;
   private eligibilityUnavailable = false;
 
-  static async loadFromDisk(authFallback?: OAuthAuthDetails): Promise<AccountManager> {
+  static async loadFromDisk(
+    authFallback?: OAuthAuthDetails,
+    modelRoutingConfig?: ModelAccountRoutingConfig,
+  ): Promise<AccountManager> {
     const stored = await loadAccounts();
-    return new AccountManager(authFallback, stored);
+    return new AccountManager(authFallback, stored, modelRoutingConfig);
   }
 
-  constructor(authFallback?: OAuthAuthDetails, stored?: AccountStorageV4 | null) {
+  constructor(
+    authFallback?: OAuthAuthDetails,
+    stored?: AccountStorageV4 | null,
+    modelRoutingConfig?: ModelAccountRoutingConfig,
+  ) {
+    if (modelRoutingConfig) {
+      this.modelRoutingConfig = modelRoutingConfig;
+    }
     const authParts = authFallback ? parseRefreshParts(authFallback.refresh) : null;
 
     if (stored && stored.accounts.length === 0) {
@@ -500,8 +560,22 @@ export class AccountManager {
             touchedForQuota: {},
             fingerprint: acc.fingerprint ?? generateFingerprint(),
             fingerprintHistory: acc.fingerprintHistory ?? [],
-            cachedQuota: acc.cachedQuota as Partial<Record<QuotaGroup, QuotaGroupSummary>> | undefined,
+            cachedQuota: normalizeLegacyCachedQuota(acc.cachedQuota),
             cachedQuotaUpdatedAt: acc.cachedQuotaUpdatedAt,
+            allowedModels: sanitizeModelPatterns(acc.allowedModels),
+            disabledModels: sanitizeModelPatterns(acc.disabledModels),
+            cachedAvailableModels: Array.isArray(acc.cachedAvailableModels)
+              ? acc.cachedAvailableModels
+                  .filter((model): model is string => typeof model === "string")
+                  .map((model) => normalizeModelKey(model))
+                  .filter(Boolean)
+              : undefined,
+            cachedAvailableModelsUpdatedAt:
+              typeof acc.cachedAvailableModelsUpdatedAt === "number" &&
+              Number.isFinite(acc.cachedAvailableModelsUpdatedAt)
+                ? acc.cachedAvailableModelsUpdatedAt
+                : undefined,
+            unavailableModels: sanitizeUnavailableModels(acc.unavailableModels, baseNow),
             controlUpdatedAt: acc.controlUpdatedAt,
             verificationRequired: acc.verificationRequired,
             verificationRequiredAt: acc.verificationRequiredAt,
@@ -533,6 +607,16 @@ export class AccountManager {
           stored.activeIndexByFamily?.gemini,
           defaultIndex
         ) % this.accounts.length;
+        if (stored.activeIndexByModel) {
+          for (const [modelKey, rawIndex] of Object.entries(stored.activeIndexByModel)) {
+            const normalized = normalizeModelKey(modelKey);
+            if (!normalized) continue;
+            if (typeof rawIndex === "number" && Number.isFinite(rawIndex)) {
+              this.currentAccountIndexByModel[normalized] =
+                clampNonNegativeInt(rawIndex, defaultIndex) % this.accounts.length;
+            }
+          }
+        }
       }
 
       // Persist updated fingerprint versions to disk
@@ -565,6 +649,7 @@ export class AccountManager {
             clearedQuotaKeys: {},
             clearedSetTimes: {},
             touchedForQuota: {},
+            unavailableModels: {},
           },
         ];
         this.cursor = 0;
@@ -594,7 +679,138 @@ export class AccountManager {
       rateLimitSetTimes: { ...a.rateLimitSetTimes },
       clearedQuotaKeys: { ...a.clearedQuotaKeys },
       clearedSetTimes: { ...a.clearedSetTimes },
+      allowedModels: a.allowedModels ? [...a.allowedModels] : undefined,
+      disabledModels: a.disabledModels ? [...a.disabledModels] : undefined,
+      cachedAvailableModels: a.cachedAvailableModels ? [...a.cachedAvailableModels] : undefined,
+      unavailableModels: { ...a.unavailableModels },
     }));
+  }
+
+  setModelRoutingConfig(config: ModelAccountRoutingConfig): void {
+    this.modelRoutingConfig = config;
+  }
+
+  private clearExpiredUnavailableModels(account: ManagedAccount): void {
+    const now = nowMs();
+    for (const key of Object.keys(account.unavailableModels)) {
+      const until = account.unavailableModels[key];
+      if (until === undefined || !Number.isFinite(until) || now >= until) {
+        delete account.unavailableModels[key];
+      }
+    }
+  }
+
+  getAccountModelIneligibilityReason(
+    account: ManagedAccount,
+    model?: string | null,
+  ): ModelIneligibilityReason | null {
+    this.clearExpiredUnavailableModels(account);
+    const result = evaluateAccountModelEligibility(
+      account,
+      model,
+      this.modelRoutingConfig,
+      nowMs(),
+    );
+    return result.eligible ? null : result.reason;
+  }
+
+  isAccountEligibleForModel(account: ManagedAccount, model?: string | null): boolean {
+    return this.getAccountModelIneligibilityReason(account, model) === null;
+  }
+
+  getEligibleAccountsForModel(
+    model?: string | null,
+    excludeIndices?: Set<number>,
+  ): ManagedAccount[] {
+    if (this.eligibilityUnavailable) return [];
+    return this.accounts.filter(
+      (account) =>
+        account.enabled !== false &&
+        !excludeIndices?.has(account.index) &&
+        this.isAccountEligibleForModel(account, model),
+    );
+  }
+
+  hasEligibleAccountForModel(
+    model?: string | null,
+    excludeIndices?: Set<number>,
+  ): boolean {
+    return this.getEligibleAccountsForModel(model, excludeIndices).length > 0;
+  }
+
+  markModelUnavailable(
+    account: ManagedAccount,
+    model: string,
+    cooldownMs?: number,
+  ): void {
+    const modelKey = normalizeModelKey(model);
+    if (!modelKey) return;
+    const effectiveCooldownMs =
+      cooldownMs ?? (this.modelRoutingConfig.unavailable_cooldown_minutes ?? 30) * 60 * 1000;
+    account.unavailableModels[modelKey] = nowMs() + Math.max(1_000, effectiveCooldownMs);
+    if (this.currentAccountIndexByModel[modelKey] === account.index) {
+      delete this.currentAccountIndexByModel[modelKey];
+    }
+  }
+
+  clearModelUnavailable(account: ManagedAccount, model: string): void {
+    const modelKey = normalizeModelKey(model);
+    if (!modelKey) return;
+    delete account.unavailableModels[modelKey];
+  }
+
+  updateAvailableModelsCache(
+    accountIndex: number,
+    availableModelsOrRegistry: readonly string[] | AntigravityAvailableModels,
+  ): void {
+    const account = this.accounts[accountIndex];
+    if (!account) return;
+    const available = Array.isArray(availableModelsOrRegistry)
+      ? Array.from(
+          new Set(
+            availableModelsOrRegistry
+              .map((model) => normalizeModelKey(model))
+              .filter(Boolean),
+          ),
+        ).sort()
+      : extractAvailableModelsFromRegistry(
+          availableModelsOrRegistry as AntigravityAvailableModels,
+        ).available;
+
+    account.cachedAvailableModels = available;
+    account.cachedAvailableModelsUpdatedAt = nowMs();
+
+    const availableSet = new Set(available);
+    for (const modelKey of Object.keys(account.unavailableModels)) {
+      if (availableSet.has(modelKey)) {
+        delete account.unavailableModels[modelKey];
+      }
+    }
+    for (const [modelKey, activeIndex] of Object.entries(this.currentAccountIndexByModel)) {
+      if (activeIndex === accountIndex && !availableSet.has(modelKey)) {
+        delete this.currentAccountIndexByModel[modelKey];
+      }
+    }
+  }
+
+  setAccountModelRules(
+    accountIndex: number,
+    rules: { allowedModels?: string[]; disabledModels?: string[] },
+  ): boolean {
+    const account = this.accounts[accountIndex];
+    if (!account) return false;
+    account.allowedModels = sanitizeModelPatterns(rules.allowedModels);
+    account.disabledModels = sanitizeModelPatterns(rules.disabledModels);
+    account.controlUpdatedAt = Math.max(nowMs(), (account.controlUpdatedAt ?? 0) + 1);
+
+    for (const [modelKey, activeIndex] of Object.entries(this.currentAccountIndexByModel)) {
+      if (activeIndex === accountIndex && !this.isAccountEligibleForModel(account, modelKey)) {
+        delete this.currentAccountIndexByModel[modelKey];
+      }
+    }
+
+    this.requestSaveToDisk();
+    return true;
   }
 
   /**
@@ -619,8 +835,10 @@ export class AccountManager {
     this.cursor = account.index;
     this.currentAccountIndexByFamily.claude = account.index;
     this.currentAccountIndexByFamily.gemini = account.index;
+    this.currentAccountIndexByModel = {};
     this.sessionOffsetApplied.claude = true;
     this.sessionOffsetApplied.gemini = true;
+    this.sessionOffsetAppliedByModel = {};
     return true;
   }
 
@@ -635,6 +853,40 @@ export class AccountManager {
       }
     }
     return null;
+  }
+
+  getCurrentAccountForModel(family: ModelFamily, model?: string | null): ManagedAccount | null {
+    if (this.eligibilityUnavailable) return null;
+    const modelKey = model ? normalizeModelKey(model) : "";
+    if (modelKey) {
+      const modelIndex = this.currentAccountIndexByModel[modelKey];
+      if (modelIndex !== undefined && modelIndex >= 0 && modelIndex < this.accounts.length) {
+        const account = this.accounts[modelIndex] ?? null;
+        if (account && account.enabled !== false && this.isAccountEligibleForModel(account, model)) {
+          return account;
+        }
+      }
+      const familyAccount = this.getCurrentAccountForFamily(family);
+      if (familyAccount && this.isAccountEligibleForModel(familyAccount, model)) {
+        return familyAccount;
+      }
+      return null;
+    }
+    return this.getCurrentAccountForFamily(family);
+  }
+
+  private setActiveAccountIndex(
+    family: ModelFamily,
+    model: string | null | undefined,
+    index: number,
+  ): void {
+    if (model) {
+      const modelKey = normalizeModelKey(model);
+      if (modelKey) {
+        this.currentAccountIndexByModel[modelKey] = index;
+      }
+    }
+    this.currentAccountIndexByFamily[family] = index;
   }
 
   /**
@@ -666,12 +918,13 @@ export class AccountManager {
   ): ManagedAccount | null {
     if (this.eligibilityUnavailable) return null;
     const quotaKey = getQuotaKey(family, headerStyle, model);
+    const modelKey = model ? normalizeModelKey(model) : "";
 
     if (strategy === 'round-robin') {
       const next = this.getNextForFamily(family, model, headerStyle, softQuotaThresholdPercent, softQuotaCacheTtlMs, excludeIndices);
       if (next) {
         this.markTouchedForQuota(next, quotaKey);
-        this.currentAccountIndexByFamily[family] = next.index;
+        this.setActiveAccountIndex(family, model, next.index);
       }
       return next;
     }
@@ -681,7 +934,12 @@ export class AccountManager {
       const tokenTracker = getTokenTracker();
       
       const accountsWithMetrics: AccountWithMetrics[] = this.accounts
-        .filter(acc => acc.enabled !== false && !excludeIndices?.has(acc.index))
+        .filter(
+          (acc) =>
+            acc.enabled !== false &&
+            !excludeIndices?.has(acc.index) &&
+            this.isAccountEligibleForModel(acc, model),
+        )
         .map(acc => {
           clearExpiredRateLimits(acc);
           return {
@@ -698,8 +956,8 @@ export class AccountManager {
           };
         });
 
-      // Get current account index for stickiness
-      const currentIndex = this.currentAccountIndexByFamily[family] ?? null;
+      // Get current account index for stickiness (per-model when model is known)
+      const currentIndex = this.getCurrentAccountForModel(family, model)?.index ?? null;
       
       const selectedIndex = selectHybridAccount(accountsWithMetrics, tokenTracker, currentIndex);
       if (selectedIndex !== null) {
@@ -707,7 +965,7 @@ export class AccountManager {
         if (selected) {
           selected.lastUsed = nowMs();
           this.markTouchedForQuota(selected, quotaKey);
-          this.currentAccountIndexByFamily[family] = selected.index;
+          this.setActiveAccountIndex(family, model, selected.index);
           return selected;
         }
       }
@@ -716,24 +974,42 @@ export class AccountManager {
     // Fallback: sticky selection (used when hybrid finds no candidates)
     // PID-based offset for multi-session distribution (opt-in)
     // Different sessions (PIDs) will prefer different starting accounts
-    if (pidOffsetEnabled && !this.sessionOffsetApplied[family] && this.accounts.length > 1) {
-      const pidOffset = process.pid % this.accounts.length;
-      const baseIndex = this.currentAccountIndexByFamily[family] ?? 0;
-      const newIndex = (baseIndex + pidOffset) % this.accounts.length;
-      
-      debugLogToFile(`[Account] Applying PID offset: pid=${process.pid} offset=${pidOffset} family=${family} index=${baseIndex}->${newIndex}`);
-      
-      this.currentAccountIndexByFamily[family] = newIndex;
-      this.sessionOffsetApplied[family] = true;
+    if (pidOffsetEnabled && this.accounts.length > 1) {
+      if (modelKey) {
+        if (!this.sessionOffsetAppliedByModel[modelKey]) {
+          const eligible = this.getEligibleAccountsForModel(model);
+          if (eligible.length > 1) {
+            const pidOffset = process.pid % eligible.length;
+            const currentIdx = this.currentAccountIndexByModel[modelKey] ?? this.currentAccountIndexByFamily[family] ?? 0;
+            const currentPos = Math.max(0, eligible.findIndex((a) => a.index === currentIdx));
+            const newAccount = eligible[(currentPos + pidOffset) % eligible.length];
+            if (newAccount) {
+              debugLogToFile(`[Account] Applying PID offset: pid=${process.pid} offset=${pidOffset} model=${modelKey} index=${currentIdx}->${newAccount.index}`);
+              this.currentAccountIndexByModel[modelKey] = newAccount.index;
+            }
+          }
+          this.sessionOffsetAppliedByModel[modelKey] = true;
+        }
+      } else if (!this.sessionOffsetApplied[family]) {
+        const pidOffset = process.pid % this.accounts.length;
+        const baseIndex = this.currentAccountIndexByFamily[family] ?? 0;
+        const newIndex = (baseIndex + pidOffset) % this.accounts.length;
+        
+        debugLogToFile(`[Account] Applying PID offset: pid=${process.pid} offset=${pidOffset} family=${family} index=${baseIndex}->${newIndex}`);
+        
+        this.currentAccountIndexByFamily[family] = newIndex;
+        this.sessionOffsetApplied[family] = true;
+      }
     }
 
-    const current = this.getCurrentAccountForFamily(family);
+    const current = this.getCurrentAccountForModel(family, model);
     if (current && !excludeIndices?.has(current.index)) {
       clearExpiredRateLimits(current);
       const isLimitedForRequestedStyle = isRateLimitedForHeaderStyle(current, family, headerStyle, model);
       const isOverThreshold = isOverSoftQuotaThreshold(current, family, headerStyle, softQuotaThresholdPercent, softQuotaCacheTtlMs, model);
       if (!isLimitedForRequestedStyle && !isOverThreshold && !this.isAccountCoolingDown(current)) {
         this.markTouchedForQuota(current, quotaKey);
+        this.setActiveAccountIndex(family, model, current.index);
         return current;
       }
     }
@@ -741,7 +1017,7 @@ export class AccountManager {
     const next = this.getNextForFamily(family, model, headerStyle, softQuotaThresholdPercent, softQuotaCacheTtlMs, excludeIndices);
     if (next) {
       this.markTouchedForQuota(next, quotaKey);
-      this.currentAccountIndexByFamily[family] = next.index;
+      this.setActiveAccountIndex(family, model, next.index);
     }
     return next;
   }
@@ -752,6 +1028,7 @@ export class AccountManager {
       clearExpiredRateLimits(a);
       return a.enabled !== false &&
              !excludeIndices?.has(a.index) &&
+             this.isAccountEligibleForModel(a, model) &&
              !isRateLimitedForHeaderStyle(a, family, headerStyle, model) &&
              !isOverSoftQuotaThreshold(a, family, headerStyle, softQuotaThresholdPercent, softQuotaCacheTtlMs, model) &&
              !this.isAccountCoolingDown(a);
@@ -761,12 +1038,18 @@ export class AccountManager {
       return null;
     }
 
-    const account = available[this.cursor % available.length];
+    const modelKey = model ? normalizeModelKey(model) : "";
+    const cursorValue = modelKey ? (this.cursorByModel[modelKey] ?? 0) : this.cursor;
+    const account = available[cursorValue % available.length];
     if (!account) {
       return null;
     }
 
-    this.cursor++;
+    if (modelKey) {
+      this.cursorByModel[modelKey] = cursorValue + 1;
+    } else {
+      this.cursor++;
+    }
     // Note: lastUsed is now updated after successful request via markAccountUsed()
     return account;
   }
@@ -901,6 +1184,7 @@ export class AccountManager {
     return this.accounts.filter(acc => {
       clearExpiredRateLimits(acc);
       return acc.enabled !== false &&
+             this.isAccountEligibleForModel(acc, model) &&
              this.isFreshForQuota(acc, quotaKey) && 
              !isRateLimitedForFamily(acc, family, model) && 
              !this.isAccountCoolingDown(acc);
@@ -944,6 +1228,10 @@ export class AccountManager {
       if (acc.enabled === false) {
         return false;
       }
+      // Skip accounts ineligible for the requested model
+      if (!this.isAccountEligibleForModel(acc, model)) {
+        return false;
+      }
       // Skip cooling down accounts
       if (this.isAccountCoolingDown(acc)) {
         return false;
@@ -968,6 +1256,18 @@ export class AccountManager {
         if (this.currentAccountIndexByFamily[family] === accountIndex) {
           const next = this.accounts.find((a, i) => i !== accountIndex && a.enabled !== false);
           this.currentAccountIndexByFamily[family] = next?.index ?? -1;
+        }
+      }
+      for (const [modelKey, currentIdx] of Object.entries(this.currentAccountIndexByModel)) {
+        if (currentIdx === accountIndex) {
+          const next = this.accounts.find(
+            (a, i) => i !== accountIndex && a.enabled !== false && this.isAccountEligibleForModel(a, modelKey),
+          );
+          if (next) {
+            this.currentAccountIndexByModel[modelKey] = next.index;
+          } else {
+            delete this.currentAccountIndexByModel[modelKey];
+          }
         }
       }
     }
@@ -1053,8 +1353,10 @@ export class AccountManager {
 
     if (this.accounts.length === 0) {
       this.cursor = 0;
+      this.cursorByModel = {};
       this.currentAccountIndexByFamily.claude = -1;
       this.currentAccountIndexByFamily.gemini = -1;
+      this.currentAccountIndexByModel = {};
       return true;
     }
 
@@ -1069,6 +1371,14 @@ export class AccountManager {
       }
       if (this.currentAccountIndexByFamily[family] >= this.accounts.length) {
         this.currentAccountIndexByFamily[family] = -1;
+      }
+    }
+
+    for (const [modelKey, currentIdx] of Object.entries(this.currentAccountIndexByModel)) {
+      if (currentIdx === idx) {
+        delete this.currentAccountIndexByModel[modelKey];
+      } else if (currentIdx > idx) {
+        this.currentAccountIndexByModel[modelKey] = currentIdx - 1;
       }
     }
 
@@ -1102,18 +1412,21 @@ export class AccountManager {
     headerStyle?: HeaderStyle,
     strict?: boolean,
   ): number {
-    const available = this.accounts.filter((a) => {
+    const eligible = this.accounts.filter(
+      (a) => a.enabled !== false && this.isAccountEligibleForModel(a, model),
+    );
+    const available = eligible.filter((a) => {
       clearExpiredRateLimits(a);
-      return a.enabled !== false && (strict && headerStyle
+      return strict && headerStyle
         ? !isRateLimitedForHeaderStyle(a, family, headerStyle, model)
-        : !isRateLimitedForFamily(a, family, model));
+        : !isRateLimitedForFamily(a, family, model);
     });
     if (available.length > 0) {
       return 0;
     }
 
     const waitTimes: number[] = [];
-    for (const a of this.accounts) {
+    for (const a of eligible) {
       if (family === "claude") {
         const t = a.rateLimitResetTimes.claude;
         if (t !== undefined) waitTimes.push(Math.max(0, t - nowMs()));
@@ -1140,9 +1453,29 @@ export class AccountManager {
     // A failed read must block selection, not turn cached controls into a disk update.
     if (!stored) return;
     const current = new Map(stored.accounts.map((account) => [account.refreshToken, account]));
+    const knownTokens = new Set<string>();
+    const byEmail = new Map<string, ManagedAccount>();
     for (const account of this.accounts) {
+      knownTokens.add(account.parts.refreshToken);
+      if (account.email) {
+        byEmail.set(account.email.toLowerCase(), account);
+      }
       const latest = current.get(account.parts.refreshToken);
-      // Do not undo a newer local verification block while its debounced save
+      if (latest) {
+        const latestCatalogUpdatedAt = latest.cachedAvailableModelsUpdatedAt ?? 0;
+        const localCatalogUpdatedAt = account.cachedAvailableModelsUpdatedAt ?? 0;
+        if (
+          Array.isArray(latest.cachedAvailableModels) &&
+          latestCatalogUpdatedAt >= localCatalogUpdatedAt
+        ) {
+          account.cachedAvailableModels = latest.cachedAvailableModels
+            .filter((model): model is string => typeof model === "string")
+            .map((model) => normalizeModelKey(model))
+            .filter(Boolean);
+          account.cachedAvailableModelsUpdatedAt = latest.cachedAvailableModelsUpdatedAt;
+        }
+      }
+      // Do not undo a newer local verification/rule change while its debounced save
       // is still pending; the storage merge will persist that control revision.
       if (latest && (account.controlUpdatedAt ?? 0) > (latest.controlUpdatedAt ?? 0)) continue;
       account.enabled = latest !== undefined && latest.enabled !== false && latest.verificationRequired !== true;
@@ -1151,6 +1484,81 @@ export class AccountManager {
       account.verificationRequiredAt = latest?.verificationRequiredAt;
       account.verificationRequiredReason = latest?.verificationRequiredReason;
       account.verificationUrl = latest?.verificationUrl;
+      account.allowedModels = sanitizeModelPatterns(latest?.allowedModels);
+      account.disabledModels = sanitizeModelPatterns(latest?.disabledModels);
+    }
+
+    // Pick up accounts added or re-authenticated externally (e.g. via /antigravity-accounts TUI)
+    // without requiring an OpenCode restart.
+    const baseNow = nowMs();
+    for (const storedAcc of stored.accounts) {
+      if (!storedAcc.refreshToken || knownTokens.has(storedAcc.refreshToken)) continue;
+      const emailKey = storedAcc.email?.toLowerCase();
+      const existingByEmail = emailKey ? byEmail.get(emailKey) : undefined;
+      if (existingByEmail && !current.has(existingByEmail.parts.refreshToken)) {
+        // Token was rotated/refreshed in storage for this email
+        existingByEmail.parts = {
+          refreshToken: storedAcc.refreshToken,
+          projectId: storedAcc.projectId ?? existingByEmail.parts.projectId,
+          managedProjectId: storedAcc.managedProjectId ?? existingByEmail.parts.managedProjectId,
+        };
+        existingByEmail.access = undefined;
+        existingByEmail.expires = undefined;
+        existingByEmail.enabled = storedAcc.enabled !== false && storedAcc.verificationRequired !== true;
+        existingByEmail.controlUpdatedAt = storedAcc.controlUpdatedAt;
+        existingByEmail.verificationRequired = storedAcc.verificationRequired;
+        existingByEmail.verificationRequiredAt = storedAcc.verificationRequiredAt;
+        existingByEmail.verificationRequiredReason = storedAcc.verificationRequiredReason;
+        existingByEmail.verificationUrl = storedAcc.verificationUrl;
+        existingByEmail.allowedModels = sanitizeModelPatterns(storedAcc.allowedModels);
+        existingByEmail.disabledModels = sanitizeModelPatterns(storedAcc.disabledModels);
+        knownTokens.add(storedAcc.refreshToken);
+        continue;
+      }
+
+      const clearedQuotaKeys = sanitizeClearedQuotaKeys(storedAcc.clearedQuotaKeys);
+      const addedAccount: ManagedAccount = {
+        index: this.accounts.length,
+        email: storedAcc.email,
+        addedAt: clampNonNegativeInt(storedAcc.addedAt, baseNow),
+        lastUsed: clampNonNegativeInt(storedAcc.lastUsed, 0),
+        parts: {
+          refreshToken: storedAcc.refreshToken,
+          projectId: storedAcc.projectId,
+          managedProjectId: storedAcc.managedProjectId,
+        },
+        enabled: storedAcc.enabled !== false && storedAcc.verificationRequired !== true,
+        rateLimitResetTimes: storedAcc.rateLimitResetTimes ?? {},
+        rateLimitSetTimes: sanitizeRateLimitSetTimes(storedAcc.rateLimitSetTimes, storedAcc.rateLimitResetTimes),
+        clearedQuotaKeys,
+        clearedSetTimes: sanitizeClearedSetTimes(storedAcc.clearedSetTimes, clearedQuotaKeys),
+        lastSwitchReason: storedAcc.lastSwitchReason,
+        coolingDownUntil: storedAcc.coolingDownUntil,
+        cooldownReason: storedAcc.cooldownReason,
+        touchedForQuota: {},
+        fingerprint: storedAcc.fingerprint ?? generateFingerprint(),
+        fingerprintHistory: storedAcc.fingerprintHistory ?? [],
+        cachedQuota: normalizeLegacyCachedQuota(storedAcc.cachedQuota),
+        cachedQuotaUpdatedAt: storedAcc.cachedQuotaUpdatedAt,
+        allowedModels: sanitizeModelPatterns(storedAcc.allowedModels),
+        disabledModels: sanitizeModelPatterns(storedAcc.disabledModels),
+        cachedAvailableModels: Array.isArray(storedAcc.cachedAvailableModels)
+          ? storedAcc.cachedAvailableModels
+              .filter((model): model is string => typeof model === "string")
+              .map((model) => normalizeModelKey(model))
+              .filter(Boolean)
+          : undefined,
+        cachedAvailableModelsUpdatedAt: storedAcc.cachedAvailableModelsUpdatedAt,
+        unavailableModels: sanitizeUnavailableModels(storedAcc.unavailableModels, baseNow),
+        controlUpdatedAt: storedAcc.controlUpdatedAt,
+        verificationRequired: storedAcc.verificationRequired,
+        verificationRequiredAt: storedAcc.verificationRequiredAt,
+        verificationRequiredReason: storedAcc.verificationRequiredReason,
+        verificationUrl: storedAcc.verificationUrl,
+      };
+      this.accounts.push(addedAccount);
+      knownTokens.add(storedAcc.refreshToken);
+      if (emailKey) byEmail.set(emailKey, addedAccount);
     }
   }
 
@@ -1226,9 +1634,22 @@ export class AccountManager {
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
+  private serializeUnavailableModels(account: ManagedAccount): Record<string, number> | undefined {
+    this.clearExpiredUnavailableModels(account);
+    return Object.keys(account.unavailableModels).length > 0
+      ? { ...account.unavailableModels }
+      : undefined;
+  }
+
   private createStorageSnapshot(): AccountStorageV4 {
     const claudeIndex = Math.max(0, this.currentAccountIndexByFamily.claude);
     const geminiIndex = Math.max(0, this.currentAccountIndexByFamily.gemini);
+    const activeIndexByModel: Record<string, number> = {};
+    for (const [modelKey, index] of Object.entries(this.currentAccountIndexByModel)) {
+      if (index >= 0 && index < this.accounts.length) {
+        activeIndexByModel[modelKey] = index;
+      }
+    }
     return {
       version: 4,
       accounts: this.accounts.map((a) => ({
@@ -1255,6 +1676,11 @@ export class AccountManager {
         fingerprintHistory: a.fingerprintHistory?.length ? a.fingerprintHistory : undefined,
         cachedQuota: a.cachedQuota && Object.keys(a.cachedQuota).length > 0 ? a.cachedQuota : undefined,
         cachedQuotaUpdatedAt: a.cachedQuotaUpdatedAt,
+        allowedModels: a.allowedModels?.length ? [...a.allowedModels] : undefined,
+        disabledModels: a.disabledModels?.length ? [...a.disabledModels] : undefined,
+        cachedAvailableModels: a.cachedAvailableModels !== undefined ? [...a.cachedAvailableModels] : undefined,
+        cachedAvailableModelsUpdatedAt: a.cachedAvailableModelsUpdatedAt,
+        unavailableModels: this.serializeUnavailableModels(a),
         controlUpdatedAt: a.controlUpdatedAt,
         verificationRequired: a.verificationRequired,
         verificationRequiredAt: a.verificationRequiredAt,
@@ -1266,6 +1692,7 @@ export class AccountManager {
         claude: claudeIndex,
         gemini: geminiIndex,
       },
+      ...(Object.keys(activeIndexByModel).length > 0 ? { activeIndexByModel } : {}),
     };
   }
 
@@ -1486,9 +1913,9 @@ export class AccountManager {
 
   areAllAccountsOverSoftQuota(family: ModelFamily, thresholdPercent: number, cacheTtlMs: number, model?: string | null, headerStyle: HeaderStyle = "antigravity"): boolean {
     if (thresholdPercent >= 100) return false;
-    const enabled = this.accounts.filter(a => a.enabled !== false);
-    if (enabled.length === 0) return false;
-    return enabled.every(a => isOverSoftQuotaThreshold(a, family, headerStyle, thresholdPercent, cacheTtlMs, model));
+    const eligible = this.accounts.filter(a => a.enabled !== false && this.isAccountEligibleForModel(a, model));
+    if (eligible.length === 0) return false;
+    return eligible.every(a => isOverSoftQuotaThreshold(a, family, headerStyle, thresholdPercent, cacheTtlMs, model));
   }
 
   /**
@@ -1506,22 +1933,19 @@ export class AccountManager {
   ): number | null {
     if (thresholdPercent >= 100) return 0;
     
-    const enabled = this.accounts.filter(a => a.enabled !== false);
-    if (enabled.length === 0) return null;
+    const eligible = this.accounts.filter(a => a.enabled !== false && this.isAccountEligibleForModel(a, model));
+    if (eligible.length === 0) return null;
     
     // If any account is available (not over threshold), no wait needed
-    const available = enabled.filter(a => !isOverSoftQuotaThreshold(a, family, headerStyle, thresholdPercent, cacheTtlMs, model));
+    const available = eligible.filter(a => !isOverSoftQuotaThreshold(a, family, headerStyle, thresholdPercent, cacheTtlMs, model));
     if (available.length > 0) return 0;
     
     // All accounts are over threshold - find earliest reset time
-    // For gemini family, we MUST have the model to distinguish pro vs flash quotas.
-    // Fail-open (return null = no wait info) if model is missing to avoid blocking on wrong quota.
-    if (!model && family !== "claude") return null;
     const quotaGroup = resolveQuotaGroup(family, model);
     const now = nowMs();
     const waitTimes: number[] = [];
     
-    for (const acc of enabled) {
+    for (const acc of eligible) {
       const groupData = acc.cachedQuota?.[quotaGroup];
       if (groupData?.resetTime) {
         const resetTimestamp = Date.parse(groupData.resetTime);

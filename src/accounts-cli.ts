@@ -10,8 +10,9 @@ import { parseRefreshParts } from "./plugin/auth.ts"
 import { createAccountAdmin } from "./plugin/account-admin.ts"
 import type { PluginClient } from "./plugin/types.ts"
 
-const HELP = `Usage: antigravity-accounts <list|add|enable|disable|remove|quota|verify|refresh|configure-models> [account numbers|--all]
-Examples: antigravity-accounts remove 2 ; antigravity-accounts remove --all ; antigravity-accounts quota --all`
+const HELP = `Usage: antigravity-accounts <list|add|enable|disable|remove|quota|models|verify|refresh|configure-models> [account numbers|--all]
+Examples: antigravity-accounts remove 2 ; antigravity-accounts quota --all ; antigravity-accounts models --refresh
+          antigravity-accounts models allow 1 gemini-4-* claude-* ; antigravity-accounts models deny 2 gemini-4-argon ; antigravity-accounts models clear 2`
 const client = { app: { log: async () => undefined } } as unknown as PluginClient
 
 async function login(manual: boolean): Promise<{ refresh: string; email?: string; projectId?: string; managedProjectId?: string }> {
@@ -48,11 +49,42 @@ async function login(manual: boolean): Promise<{ refresh: string; email?: string
 export async function runAccountsCLI(args: string[], out: (text: string) => void = console.log): Promise<void> {
   const [command = "list", ...selectors] = args
   if (command === "help" || command === "--help") { out(HELP); return }
-  if (!["list", "add", "enable", "disable", "remove", "quota", "verify", "refresh", "configure-models"].includes(command)) throw new Error(HELP)
-  const mutates = ["add", "enable", "disable", "remove", "verify", "refresh", "configure-models"].includes(command)
+  if (!["list", "add", "enable", "disable", "remove", "quota", "models", "verify", "refresh", "configure-models"].includes(command)) throw new Error(HELP)
+  const isModelsSubcommand = command === "models" && ["allow", "deny", "clear"].includes(selectors[0] ?? "")
+  const isModelsRefresh = command === "models" && selectors.includes("--refresh")
+  const mutates = ["add", "enable", "disable", "remove", "verify", "refresh", "configure-models"].includes(command) || isModelsSubcommand || isModelsRefresh
   if (mutates) out("Warning: close OpenCode before changing accounts externally; a running process may retain its own account state.")
   const admin = await createAccountAdmin(client)
   const ids = admin.accounts.map((account) => account.id)
+  if (command === "models") {
+    if (isModelsSubcommand) {
+      const [subcommand, accountSelector, ...patterns] = selectors
+      if (!accountSelector) throw new Error("Select an account number or --all")
+      const targetIds = accountSelector === "--all" ? ids : [(() => {
+        const index = Number(accountSelector)
+        if (!Number.isSafeInteger(index) || index < 1 || index > ids.length) throw new Error(`Invalid account number: ${accountSelector}`)
+        return ids[index - 1]!
+      })()]
+      if (subcommand === "clear") {
+        out(await admin.setModelRules(targetIds, { clear: true }))
+        return
+      }
+      if (!patterns.length) throw new Error(`Provide at least one model ID or pattern for models ${subcommand}`)
+      const update = subcommand === "allow" ? { allow: patterns } : { deny: patterns }
+      out(await admin.setModelRules(targetIds, update))
+      return
+    }
+    const accountArgs = selectors.filter((value) => value !== "--refresh")
+    const allModels = accountArgs.includes("--all")
+    if (allModels && accountArgs.length !== 1) throw new Error("Use --all alone")
+    const selectedModels = allModels ? ids : accountArgs.map((value) => {
+      const index = Number(value)
+      if (!Number.isSafeInteger(index) || index < 1 || index > ids.length) throw new Error(`Invalid account number: ${value}`)
+      return ids[index - 1]!
+    })
+    out(await admin.models(selectedModels.length ? selectedModels : undefined, { refresh: isModelsRefresh }))
+    return
+  }
   const all = selectors.includes("--all")
   if (all && selectors.length !== 1) throw new Error("Use --all alone")
   const selected = all ? ids : selectors.filter((value) => value !== "--no-browser").map((value) => {

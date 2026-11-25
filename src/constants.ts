@@ -80,6 +80,17 @@ export const ANTIGRAVITY_CLI_USER_AGENT =
     "; arch=" + (process.arch === "arm64" ? "arm64" : "x64") +
     "; cl=1020628950; auth_method=consumer)";
 
+/**
+ * Antigravity Hub User-Agent required by `v1internal:retrieveUserQuotaSummary`
+ * to return accurate 5h/weekly usage buckets (older/CLI UAs can be gated or
+ * return static 100% / missing Gemini buckets).
+ */
+export const ANTIGRAVITY_HUB_USER_AGENT =
+  "antigravity/hub/2.24.0 " +
+  (process.platform === "win32" ? "windows" : process.platform === "darwin" ? "darwin" : "linux") +
+  "/" +
+  (process.arch === "arm64" ? "arm64" : "amd64");
+
 export const ANTIGRAVITY_VERSION_FALLBACK = "1.18.3";
 let antigravityVersion = ANTIGRAVITY_VERSION_FALLBACK;
 let versionLocked = false;

@@ -5,7 +5,10 @@ vi.mock("./plugin/storage.ts", () => ({ loadAccounts: mocks.load, removeAccountF
 vi.mock("./antigravity/oauth.ts", () => ({ authorizeAntigravity: async () => ({ url: "https://accounts.example.test/?state=state" }), cancelAuthorization: vi.fn(), exchangeAntigravity: mocks.exchange }))
 vi.mock("./plugin/server.ts", () => ({ startOAuthListener: async () => ({ waitForCallback: mocks.callback, close: async () => undefined }) }))
 vi.mock("./plugin.ts", () => ({ verifyAccountAccess: mocks.verify, syncV2AccountChange: mocks.sync }))
-vi.mock("./plugin/quota.ts", () => ({ checkAccountsQuota: mocks.quota }))
+vi.mock("./plugin/quota.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./plugin/quota.ts")>()
+  return { ...original, checkAccountsQuota: mocks.quota }
+})
 vi.mock("./plugin/config/updater.ts", () => ({ updateV2ModelsConfig: mocks.config }))
 const { runAccountsCLI } = await import("./accounts-cli.ts")
 const account = (refreshToken: string) => ({ refreshToken, email: `${refreshToken}@example.com`, addedAt: 1, lastUsed: 0 })
@@ -78,5 +81,28 @@ describe("antigravity-accounts CLI", () => {
     expect(mocks.exchange).not.toHaveBeenCalled()
     expect(mocks.replace).not.toHaveBeenCalled()
     expect(mocks.save).not.toHaveBeenCalled()
+  })
+
+  it("lists, refreshes, and configures per-account model rules via the models command", async () => {
+    mocks.quota.mockResolvedValueOnce([
+      { status: "ok", availableModels: ["gemini-3-flash", "gemini-4-argon"], quota: { groups: {} } },
+    ])
+    const lines: string[] = []
+    await runAccountsCLI(["models", "1", "--refresh"], (line) => lines.push(line))
+    expect(lines.join("\n")).toContain("gemini-4-argon")
+    expect(mocks.update).toHaveBeenCalledWith("first", expect.any(Function))
+
+    lines.length = 0
+    await runAccountsCLI(["models", "deny", "2", "gemini-4-*"], (line) => lines.push(line))
+    expect(lines.at(-1)).toContain("deny=gemini-4-*")
+    expect(mocks.update).toHaveBeenCalledWith("second", expect.any(Function))
+
+    lines.length = 0
+    await runAccountsCLI(["models", "allow", "1", "claude-*"], (line) => lines.push(line))
+    expect(lines.at(-1)).toContain("allow=claude-*")
+
+    lines.length = 0
+    await runAccountsCLI(["models", "clear", "2"], (line) => lines.push(line))
+    expect(lines.at(-1)).toContain("cleared")
   })
 })
