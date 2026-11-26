@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { Integration, Model, Plugin, Provider } from "@opencode/plugin"
 import type { Credential } from "@opencode/plugin"
 import type { IntegrationOAuthAuthorization } from "@opencode/plugin/promise/integration"
@@ -5,13 +6,20 @@ import type { SessionContext } from "@opencode/plugin/promise/session"
 import { z } from "zod"
 import { createGoogleGenerativeAI } from "./google-provider.ts"
 import { ANTIGRAVITY_PROVIDER_ID } from "./constants.ts"
+import { authorizeAntigravity, cancelAuthorization, exchangeAntigravity } from "./antigravity/oauth.ts"
+import { parseCallbackInput } from "./account-menu.ts"
+import { AntigravityAccountsRpc } from "./antigravity-rpc.ts"
 import { createAntigravityPlugin } from "./plugin.ts"
+import { createAccountAdmin } from "./plugin/account-admin.ts"
+import type { AccountAdmin } from "./plugin/account-admin.ts"
 import { loadConfig } from "./plugin/config/index.ts"
 import { parseRefreshParts } from "./plugin/auth.ts"
 import { gemini4Model, missingGemini4Credential } from "./plugin/gemini4.ts"
 import { extractRequestedGeminiModel } from "./plugin/api-key.ts"
 import { createLogger } from "./plugin/logger.ts"
 import { writeConsoleLog } from "./plugin/logging-utils.ts"
+import { startOAuthListener } from "./plugin/server.ts"
+import type { OAuthListener } from "./plugin/server.ts"
 import type { OpencodeModelDefinition } from "./plugin/config/models.ts"
 import type { AuthDetails, LoaderResult, PluginClient, ProviderModel } from "./plugin/types.ts"
 
@@ -287,6 +295,243 @@ export const AntigravityV2Plugin = Plugin.define({
       }
     })
 
+    const refreshPool = async () => {
+      loaderPromise = undefined
+      await discoverModels()
+      await ctx.provider.reload()
+    }
+
+    interface PendingOAuthAttempt {
+      snapshotId: string
+      accountId?: string
+      expectedState: string
+      listener?: OAuthListener
+      cancelled: boolean
+      inFlight?: Promise<string>
+    }
+
+    const snapshots = new Map<string, AccountAdmin>()
+    const oauthAttempts = new Map<string, PendingOAuthAttempt>()
+    const MAX_SNAPSHOTS = 8
+    const MAX_OAUTH_ATTEMPTS = 8
+
+    const requireSnapshot = (snapshotId: string): AccountAdmin => {
+      const admin = snapshots.get(snapshotId)
+      if (!admin) throw new Error("Account selection is stale; reopen account management.")
+      return admin
+    }
+
+    const closeOAuthAttempt = async (attemptId: string, cancel = false) => {
+      const attempt = oauthAttempts.get(attemptId)
+      if (!attempt) return
+      if (cancel) attempt.cancelled = true
+      oauthAttempts.delete(attemptId)
+      await attempt.listener?.close().catch(() => undefined)
+      cancelAuthorization(attempt.expectedState)
+    }
+
+    const completeOAuthAttempt = async (attemptId: string, code: string, state: string): Promise<string> => {
+      const attempt = oauthAttempts.get(attemptId)
+      if (!attempt) throw new Error("OAuth sign-in session expired; try again.")
+      if (attempt.cancelled) throw new Error("OAuth sign-in was cancelled.")
+      if (attempt.inFlight) return attempt.inFlight
+      const run = (async () => {
+        if (!code || state !== attempt.expectedState) {
+          throw new Error("Invalid OAuth callback or state mismatch.")
+        }
+        const exchanged = await exchangeAntigravity(code, state, attempt.expectedState)
+        if (exchanged.type !== "success") {
+          throw new Error(exchanged.error || "Google OAuth exchange failed.")
+        }
+        const parts = parseRefreshParts(exchanged.refresh)
+        if (!parts.refreshToken) {
+          throw new Error("Google OAuth did not return a refresh token.")
+        }
+        const payload = {
+          refreshToken: parts.refreshToken,
+          email: exchanged.email,
+          projectId: parts.projectId,
+          managedProjectId: parts.managedProjectId,
+        }
+        const admin = requireSnapshot(attempt.snapshotId)
+        let message: string
+        if (attempt.accountId) {
+          const account = admin.accounts.find((candidate) => candidate.id === attempt.accountId)
+          await admin.completeRefresh(attempt.accountId, payload)
+          message = `Re-authenticated ${payload.email ?? account?.label ?? "Google account"}.`
+        } else {
+          message = await admin.saveNewAccount(payload)
+        }
+        await refreshPool()
+        return message
+      })()
+      attempt.inFlight = run
+      try {
+        return await run
+      } finally {
+        await closeOAuthAttempt(attemptId)
+      }
+    }
+
+    const waitWithSignal = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T | "aborted"> => {
+      if (signal.aborted) return Promise.resolve("aborted")
+      return new Promise<T | "aborted">((resolve, reject) => {
+        const onAbort = () => resolve("aborted")
+        signal.addEventListener("abort", onAbort, { once: true })
+        promise.then(
+          (value) => {
+            signal.removeEventListener("abort", onAbort)
+            resolve(value)
+          },
+          (error) => {
+            signal.removeEventListener("abort", onAbort)
+            reject(error)
+          },
+        )
+      })
+    }
+
+    const rpcRegistration = await ctx.rpc?.register(AntigravityAccountsRpc, {
+      async snapshot() {
+        const admin = await createAccountAdmin(client, PROVIDER_ID)
+        const snapshotId = randomUUID()
+        if (snapshots.size >= MAX_SNAPSHOTS) {
+          const oldest = snapshots.keys().next().value
+          if (oldest) snapshots.delete(oldest)
+        }
+        snapshots.set(snapshotId, admin)
+        return {
+          snapshotId,
+          accounts: admin.accounts.map((account) => ({
+            id: account.id,
+            label: account.label,
+            enabled: account.enabled,
+            verificationRequired: account.verificationRequired,
+            ...(account.allowedModels ? { allowedModels: [...account.allowedModels] } : {}),
+            ...(account.disabledModels ? { disabledModels: [...account.disabledModels] } : {}),
+            ...(account.cachedAvailableModels ? { cachedAvailableModels: [...account.cachedAvailableModels] } : {}),
+          })),
+        }
+      },
+      async releaseSnapshot({ snapshotId }) {
+        return { ok: snapshots.delete(snapshotId) }
+      },
+      async list({ snapshotId }) {
+        return { message: await requireSnapshot(snapshotId).list() }
+      },
+      async quotas({ snapshotId, ids }) {
+        const admin = requireSnapshot(snapshotId)
+        return { message: await (ids !== undefined ? admin.quotas(ids) : admin.quotas()) }
+      },
+      async models({ snapshotId, ids, refresh }) {
+        const admin = requireSnapshot(snapshotId)
+        return {
+          message: await (refresh !== undefined
+            ? admin.models(ids, { refresh })
+            : ids !== undefined
+              ? admin.models(ids)
+              : admin.models()),
+        }
+      },
+      async setModelRules({ snapshotId, ids, allow, deny, clear }) {
+        const message = await requireSnapshot(snapshotId).setModelRules(ids, { allow, deny, clear })
+        await refreshPool()
+        return { message }
+      },
+      async verify({ snapshotId, ids }) {
+        const admin = requireSnapshot(snapshotId)
+        const message = await (ids !== undefined ? admin.verify(ids) : admin.verify())
+        await refreshPool()
+        return { message }
+      },
+      async setEnabled({ snapshotId, ids, enabled }) {
+        const message = await requireSnapshot(snapshotId).setEnabled(ids, enabled)
+        await refreshPool()
+        return { message }
+      },
+      async remove({ snapshotId, ids, confirm }) {
+        const message = await requireSnapshot(snapshotId).remove(ids, confirm)
+        await refreshPool()
+        return { message }
+      },
+      async removeAll({ snapshotId, confirm }) {
+        const message = await requireSnapshot(snapshotId).removeAll(confirm)
+        await refreshPool()
+        return { message }
+      },
+      async configureModels({ snapshotId }) {
+        return { message: await requireSnapshot(snapshotId).configureModels() }
+      },
+      async oauthStart({ snapshotId, mode, accountId }) {
+        const admin = requireSnapshot(snapshotId)
+        if (accountId && !admin.accounts.some((account) => account.id === accountId)) {
+          throw new Error("Account selection is stale; reopen account management.")
+        }
+        const authorization = await authorizeAntigravity()
+        const expectedState = new URL(authorization.url).searchParams.get("state") ?? ""
+        if (!expectedState) throw new Error("Failed to initialize OAuth state.")
+        let listener: OAuthListener | undefined
+        if (mode === "auto") {
+          try {
+            listener = await startOAuthListener({ timeoutMs: 2 * 60 * 1000 })
+          } catch {
+            listener = undefined
+          }
+        }
+        if (oauthAttempts.size >= MAX_OAUTH_ATTEMPTS) {
+          const oldest = oauthAttempts.keys().next().value
+          if (oldest) await closeOAuthAttempt(oldest, true)
+        }
+        const attemptId = randomUUID()
+        oauthAttempts.set(attemptId, {
+          snapshotId,
+          accountId,
+          expectedState,
+          listener,
+          cancelled: false,
+        })
+        return {
+          attemptId,
+          url: authorization.url,
+          listening: Boolean(listener),
+        }
+      },
+      async oauthWait({ attemptId }, context) {
+        const attempt = oauthAttempts.get(attemptId)
+        if (!attempt || attempt.cancelled) return { status: "cancelled" as const }
+        if (attempt.inFlight) return { status: "completed" as const, message: await attempt.inFlight }
+        if (!attempt.listener) return { status: "listener-failed" as const }
+        try {
+          const callbackUrl = await waitWithSignal(attempt.listener.waitForCallback(), context.signal)
+          if (callbackUrl === "aborted") return { status: "cancelled" as const }
+          if (attempt.cancelled) return { status: "cancelled" as const }
+          if (attempt.inFlight) return { status: "completed" as const, message: await attempt.inFlight }
+          const code = callbackUrl.searchParams.get("code") ?? ""
+          const state = callbackUrl.searchParams.get("state") ?? ""
+          const message = await completeOAuthAttempt(attemptId, code, state)
+          return { status: "completed" as const, message }
+        } catch {
+          if (attempt.cancelled) return { status: "cancelled" as const }
+          if (attempt.inFlight) return { status: "completed" as const, message: await attempt.inFlight }
+          return { status: "listener-failed" as const }
+        }
+      },
+      async oauthComplete({ attemptId, rawCallback }) {
+        const attempt = oauthAttempts.get(attemptId)
+        if (!attempt) throw new Error("OAuth sign-in session expired; try again.")
+        if (attempt.inFlight) return { message: await attempt.inFlight }
+        const parsed = parseCallbackInput(rawCallback, attempt.expectedState)
+        if (!parsed) throw new Error("Invalid OAuth redirect URL or code.")
+        const message = await completeOAuthAttempt(attemptId, parsed.code, parsed.state)
+        return { message }
+      },
+      async oauthCancel({ attemptId }) {
+        const existed = oauthAttempts.has(attemptId)
+        await closeOAuthAttempt(attemptId, true)
+        return { ok: existed }
+      },
+    })
+
     const events = (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         try {
@@ -296,9 +541,7 @@ export const AntigravityV2Plugin = Plugin.define({
               parentID: event.data.parentID,
             } } } })
           } else if (event.type === "credential.updated" || event.type === "credential.switched") {
-            loaderPromise = undefined
-            await discoverModels()
-            await ctx.provider.reload()
+            await refreshPool()
           }
         } catch (error: unknown) {
           if (!controller.signal.aborted) log.warn("Event handling failed", { type: event.type, error: String(error) })
@@ -309,6 +552,9 @@ export const AntigravityV2Plugin = Plugin.define({
     })
     return async () => {
       controller.abort()
+      await rpcRegistration?.dispose()
+      await Promise.all([...oauthAttempts.keys()].map((attemptId) => closeOAuthAttempt(attemptId, true)))
+      snapshots.clear()
       legacy.dispose?.()
       await events
     }

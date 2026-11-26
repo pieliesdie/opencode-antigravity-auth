@@ -8,18 +8,40 @@ import type {
 import type { SessionContext } from "@opencode/plugin/promise/session"
 import type { ProviderModel, ProviderModelsContext } from "./plugin/types.ts"
 import { modelsFromAntigravityAvailableModels, modelsFromGeminiApi } from "./plugin/config/models.ts"
+import { AntigravityAccountsRpc } from "./antigravity-rpc.ts"
 
 const core = vi.hoisted(() => ({
   create: vi.fn(),
   loadConfig: vi.fn(),
+  verify: vi.fn(),
+  createAdmin: vi.fn(),
+  authorize: vi.fn(),
+  exchange: vi.fn(),
+  cancelAuth: vi.fn(),
+  startListener: vi.fn(),
 }))
 
 vi.mock("./plugin.ts", () => ({
   createAntigravityPlugin: core.create,
+  verifyAccountAccess: core.verify,
 }))
 
 vi.mock("./plugin/config/index.ts", () => ({
   loadConfig: core.loadConfig,
+}))
+
+vi.mock("./plugin/account-admin.ts", () => ({
+  createAccountAdmin: core.createAdmin,
+}))
+
+vi.mock("./antigravity/oauth.ts", () => ({
+  authorizeAntigravity: core.authorize,
+  exchangeAntigravity: core.exchange,
+  cancelAuthorization: core.cancelAuth,
+}))
+
+vi.mock("./plugin/server.ts", () => ({
+  startOAuthListener: core.startListener,
 }))
 
 
@@ -65,6 +87,11 @@ interface RegisteredHooks {
   integration: IntegrationMethodRegistration[]
   aisdk?: (event: AISDKEvent) => Promise<void>
   recovery?: (event: SessionContext) => void
+  rpc?: {
+    definition: unknown
+    handlers: Record<string, (input: unknown, context: { signal: AbortSignal; error: (...args: unknown[]) => unknown }) => Promise<unknown>>
+    dispose: ReturnType<typeof vi.fn>
+  }
 }
 
 interface AISDKEvent {
@@ -130,6 +157,12 @@ interface TestContext {
   }
   tool: {
     transform: (callback: (editor: TestToolEditor) => void) => Promise<{ dispose: () => Promise<void> }>
+  }
+  rpc?: {
+    register: (
+      definition: unknown,
+      handlers: Record<string, (input: unknown, context: { signal: AbortSignal; error: (...args: unknown[]) => unknown }) => Promise<unknown>>,
+    ) => Promise<{ dispose: () => Promise<void>; events: { emit: () => Promise<void> } }>
   }
   event: {
     subscribe: (input: { signal: AbortSignal }) => AsyncIterable<unknown>
@@ -280,6 +313,13 @@ function createContext(options: {
           add: () => undefined,
         })
         return registration()
+      },
+    },
+    rpc: {
+      register: async (definition, handlers) => {
+        const dispose = vi.fn(async () => undefined)
+        hooks.rpc = { definition, handlers, dispose }
+        return { dispose, events: { emit: async () => undefined } }
       },
     },
     event: { subscribe: () => options.events ?? noEvents },
@@ -734,7 +774,7 @@ describe("AntigravityV2Plugin", () => {
     })
     core.create.mockReturnValue(async () => legacy)
     core.loadConfig.mockReturnValue({ session_recovery: false })
-    const { context } = createContext({ events })
+    const { context, hooks } = createContext({ events })
     context.event.subscribe = ({ signal }) => {
       subscribedSignal = signal
       return events
@@ -744,6 +784,107 @@ describe("AntigravityV2Plugin", () => {
     await vi.waitFor(() => expect(subscribedSignal).toBeDefined())
     await cleanup()
     expect(subscribedSignal?.aborted).toBe(true)
+    expect(hooks.rpc?.dispose).toHaveBeenCalledOnce()
     expect(legacy.dispose).toHaveBeenCalledOnce()
+  })
+
+  it("registers account-management RPC handlers for Desktop GUI, reloads providers, and handles OAuth", async () => {
+    const admin = {
+      accounts: [
+        { id: "opaque-1", label: "one@example.com", enabled: true, verificationRequired: false },
+      ],
+      list: vi.fn(async () => "1. one@example.com — enabled"),
+      quotas: vi.fn(async () => "one@example.com: claude: 80%"),
+      models: vi.fn(async () => "one@example.com: available (1): gemini-4-hydrogen"),
+      setModelRules: vi.fn(async () => "Model rules updated."),
+      verify: vi.fn(async () => "one@example.com: ok"),
+      setEnabled: vi.fn(async () => "one@example.com disabled."),
+      remove: vi.fn(async () => "Removed one@example.com."),
+      removeAll: vi.fn(async () => "Removed 1 account(s)."),
+      configureModels: vi.fn(async () => "Configured."),
+      addAccount: vi.fn(() => "Add"),
+      refreshAccount: vi.fn(() => "Refresh"),
+      saveNewAccount: vi.fn(async () => "Added two@example.com (2 account(s) total)."),
+      completeRefresh: vi.fn(async () => undefined),
+    }
+    core.createAdmin.mockResolvedValue(admin)
+    core.authorize.mockResolvedValue({
+      url: "https://accounts.google.com/o/oauth2/v2/auth?state=state-xyz",
+      verifier: "v",
+      projectId: "",
+    })
+    const listenerClose = vi.fn(async () => undefined)
+    core.startListener.mockResolvedValue({
+      waitForCallback: vi.fn(async () => new URL("http://localhost:51121/oauth-callback?code=auth-code&state=state-xyz")),
+      close: listenerClose,
+    })
+    core.exchange.mockResolvedValue({
+      type: "success",
+      refresh: "tok-two|proj-two",
+      access: "access-two",
+      expires: Date.now() + 3_600_000,
+      email: "two@example.com",
+    })
+
+    const legacy = buildLegacy({
+      loader: { apiKey: "", fetch: vi.fn() },
+      authorization: { method: "auto", callback: async (): Promise<OAuthResult> => ({ type: "success", refresh: "r", access: "a", expires: 1 }) },
+    })
+    core.create.mockReturnValue(async () => legacy)
+    core.loadConfig.mockReturnValue({ session_recovery: false })
+
+    const events = (async function* (): AsyncIterable<unknown> {})()
+    const { context, hooks } = createContext({ events })
+    const cleanup = await setup(context)
+    expect(hooks.rpc?.definition).toBe(AntigravityAccountsRpc)
+
+    const handlers = hooks.rpc!.handlers
+    const rpcContext = { signal: new AbortController().signal, error: vi.fn() }
+    const snap = await handlers.snapshot!({}, rpcContext) as { snapshotId: string; accounts: Array<{ id: string; label: string }> }
+    expect(snap.accounts).toEqual([
+      { id: "opaque-1", label: "one@example.com", enabled: true, verificationRequired: false },
+    ])
+
+    await expect(handlers.setEnabled!({ snapshotId: snap.snapshotId, ids: ["opaque-1"], enabled: false }, rpcContext))
+      .resolves.toEqual({ message: "one@example.com disabled." })
+    expect(admin.setEnabled).toHaveBeenCalledWith(["opaque-1"], false)
+    expect(context.provider.reload).toHaveBeenCalled()
+
+    const started = await handlers.oauthStart!({ snapshotId: snap.snapshotId, mode: "auto" }, rpcContext) as {
+      attemptId: string
+      url: string
+      listening: boolean
+    }
+    expect(started.listening).toBe(true)
+    const waited = await handlers.oauthWait!({ attemptId: started.attemptId }, rpcContext)
+    expect(waited).toEqual({
+      status: "completed",
+      message: "Added two@example.com (2 account(s) total).",
+    })
+    expect(admin.saveNewAccount).toHaveBeenCalledWith({
+      refreshToken: "tok-two",
+      email: "two@example.com",
+      projectId: "proj-two",
+      managedProjectId: undefined,
+    })
+    expect(listenerClose).toHaveBeenCalledOnce()
+    expect(core.cancelAuth).toHaveBeenCalledWith("state-xyz")
+
+    const manualStart = await handlers.oauthStart!({
+      snapshotId: snap.snapshotId,
+      mode: "manual",
+      accountId: "opaque-1",
+    }, rpcContext) as { attemptId: string; listening: boolean }
+    expect(manualStart.listening).toBe(false)
+    await expect(handlers.oauthComplete!({
+      attemptId: manualStart.attemptId,
+      rawCallback: "http://localhost:51121/oauth-callback?code=c2&state=state-xyz",
+    }, rpcContext)).resolves.toEqual({ message: "Re-authenticated two@example.com." })
+    expect(admin.completeRefresh).toHaveBeenCalledWith("opaque-1", expect.objectContaining({
+      refreshToken: "tok-two",
+      email: "two@example.com",
+    }))
+
+    await cleanup()
   })
 })

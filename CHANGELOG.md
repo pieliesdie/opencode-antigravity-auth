@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.0] - 2026-11-26
+
+### Added
+
+- **OpenCode Desktop Account Management (`./gui-experimental`)** - Added the `@opencode/plugin/gui` bundle (`dist/gui-experimental.cjs`) exposing `/antigravity-accounts` and the **Manage Antigravity accounts** command in OpenCode Desktop **2.2.0+** via `AntigravityAccountsRpc` (`ctx.rpc.register` / `ctx.client.rpc`).
+- **Desktop Interactive OAuth & Multi-Select Model Rules** - Added browser-launch + auto-closing callback `<ui.Dialog>` (with manual redirect URL fallback), preserved multi-line formatting in account/verification/removal dialogs, and multi-select `<ui.Switch>` checklists with search filtering for per-account allow/deny rules.
+
+### Changed
+
+- **OpenCode Plugin SDK** - Updated `@opencode/plugin` dependency to `^2.4.2` and extracted shared menu flows into `src/account-menu.ts`.
+
 ## [2.2.0] - 2026-11-25
 
 ### Added

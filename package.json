@@ -1,6 +1,6 @@
 {
     "name": "@pieliesdie/opencode-antigravity-auth",
-    "version": "2.2.0",
+    "version": "2.3.0",
     "description": "Google Antigravity IDE OAuth auth plugin for Opencode - access Gemini 3 Pro and Claude 4.6 using Google credentials",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -23,7 +23,8 @@
         },
         "./tui": {
             "import": "./dist/tui.js"
-        }
+        },
+        "./gui-experimental": "./dist/gui-experimental.cjs"
     },
     "license": "MIT",
     "author": "pieliesdie",
@@ -54,7 +55,7 @@
         "LICENSE"
     ],
     "scripts": {
-        "build": "esbuild index=index.ts v1=v1.ts server=server.ts tui=src/tui.ts accounts=src/accounts-cli.ts google-provider=src/google-provider.ts --bundle --format=esm --platform=node --outdir=dist --external:node: --external:proper-lockfile --external:xdg-basedir --external:zod --external:@openauthjs/openauth --external:@opencode/plugin --sourcemap",
+        "build": "esbuild index=index.ts v1=v1.ts server=server.ts tui=src/tui.ts accounts=src/accounts-cli.ts google-provider=src/google-provider.ts --bundle --format=esm --platform=node --outdir=dist --external:node: --external:proper-lockfile --external:xdg-basedir --external:zod --external:@openauthjs/openauth --external:@opencode/plugin --sourcemap && vite build --config vite.gui.config.ts",
         "accounts": "npm run build && node dist/accounts.js",
         "build:schema": "npx tsx script/build-schema.ts",
         "typecheck": "tsc --noEmit",
@@ -76,6 +77,8 @@
         "@vitest/ui": "^3.2.7",
         "esbuild": "^0.28.1",
         "typescript": "^5.9.3",
+        "vite": "^7.3.8",
+        "vite-plugin-solid": "^2.11.17",
         "vitest": "^3.2.7",
         "zod-to-json-schema": "^3.25.2"
     },
@@ -83,7 +86,7 @@
         "@ai-sdk/google": "3.0.24",
         "@openauthjs/openauth": "^0.4.3",
         "@opencode-ai/plugin": "^0.15.31",
-        "@opencode/plugin": "2.0.27",
+        "@opencode/plugin": "^2.4.2",
         "proper-lockfile": "^4.1.2",
         "solid-js": "^1.9.17",
         "xdg-basedir": "^5.1.0",
